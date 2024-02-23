@@ -570,7 +570,7 @@ int main(int argc, char *argv[])
          return (0);
       }
    }
-   osal_thread_create(&thread1, 128000, &ecatcheck, NULL);
+   osal_thread_create(&thread1, 128000, (void*)(&ecatcheck), NULL);
 
    simpletest(argv[1],argv[2],atof(argv[3]),atof(argv[4]),atof(argv[5]));
    printf("End program\n");

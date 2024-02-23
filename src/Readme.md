@@ -13,7 +13,7 @@ sudo ./simple_test ifname control_mode target max_velocity gear_ratio
 
 example
 ```
-sudo ./test/linux/simple_test/simple_test enp3s0 csv 6.28 1 20
+sudo ./simple_test enp3s0 csv 6.28 1 20
 ```
 
 

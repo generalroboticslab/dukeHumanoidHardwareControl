@@ -7,7 +7,7 @@ project(biped
 add_subdirectory(SOEM)  
 
 # Create your executable
-add_executable(simple_test src/simple_test.c)
+add_executable(simple_test src/simple_test.cpp)
 
 # Link your executable against the SOEM library
 target_link_libraries(simple_test PRIVATE soem)  # 'soem' is the target created by add_subdirectory
