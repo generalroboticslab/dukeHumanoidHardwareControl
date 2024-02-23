@@ -116,10 +116,10 @@ void simpletest(char *ifname,char *control_mode, float target_input, float max_v
    if (strcmp(control_mode, "csp") == 0)
    {
       control_mode_uint = 8;
-      //the range of encoder is 0~2^17-1,unit is cnt
+      //the range of encoder is 0~2^17-1,unit is cnt (count)
       //the target position's unit is rad
       //convert the target position from rad to cnt
-      target_uint = (int32_t)(target_input * 131071 / (2 * 3.1415));
+      target_uint = (int32_t)(target_input * 131071 / (2 * M_PI));
    }
    else if (strcmp(control_mode, "csv") == 0)
    {
@@ -127,7 +127,7 @@ void simpletest(char *ifname,char *control_mode, float target_input, float max_v
       //the range of encoder is 0~2^17-1,unit is cnt
       //the target velocity's unit is rad/s
       //convert the target velocity from rad/s to cnt/s
-      target_uint = (int32_t)(target_input * 131071 / (2 * 3.1415));
+      target_uint = (int32_t)(target_input * 131071 / (2 * M_PI));
    }
    
 
@@ -346,10 +346,10 @@ Slave:1
                   {
                      printf("Processdata cycle %4d, WKC %d,", i, wkc);
                      printf("pos: %f, vel: %f,pos err: %f, vel err: %f,  status: 0x%x, control: 0x%x", 
-                           (float)val[j]->position_actual_value/gear_ratio * (2 * 3.1415) / 131071,
-                           (float)val[j]->velocity_actual_value/gear_ratio * (2 * 3.1415) / 131071,
-                           (float)(target[j]->target_position-val[j]->position_actual_value)/gear_ratio * (2 * 3.1415) / 131071,
-                           (float)(target[j]->target_velocity-val[j]->velocity_actual_value)/gear_ratio * (2 * 3.1415) / 131071,
+                           (float)val[j]->position_actual_value/gear_ratio * (2 * M_PI) / 131071,
+                           (float)val[j]->velocity_actual_value/gear_ratio * (2 * M_PI) / 131071,
+                           (float)(target[j]->target_position-val[j]->position_actual_value)/gear_ratio * (2 * M_PI) / 131071,
+                           (float)(target[j]->target_velocity-val[j]->velocity_actual_value)/gear_ratio * (2 * M_PI) / 131071,
                               val[j]->status_word, target[j]->control_word);
                      
                      switch (target[j]->control_word) {
