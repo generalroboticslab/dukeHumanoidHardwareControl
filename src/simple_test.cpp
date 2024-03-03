@@ -31,6 +31,9 @@
 
 #define NUM_TARGET 6 // num of motors
 
+#define CONTROL_MODE_CSP 8 // position control
+#define CONTROL_MODE_CSV 9 // velocity control
+
 // double gear_ratio[NUM_TARGET] = {20,20,20,20,10,10};
 
 char IOmap[4096];
@@ -115,7 +118,7 @@ void simpletest(char *ifname, char *control_mode, double target_input, double ma
    max_velocity_uint = (uint32_t)(max_velocity / 0.1047); // 1 RPM = 0.10472 rad/s
    if (strcmp(control_mode, "csp") == 0)
    {
-      control_mode_uint = 8;
+      control_mode_uint = CONTROL_MODE_CSP;
       // the range of encoder is 0~2^17-1,unit is cnt (count)
       // the target position's unit is rad
       // convert the target position from rad to cnt
@@ -123,7 +126,7 @@ void simpletest(char *ifname, char *control_mode, double target_input, double ma
    }
    else if (strcmp(control_mode, "csv") == 0)
    {
-      control_mode_uint = 9;
+      control_mode_uint = CONTROL_MODE_CSV;
       // the range of encoder is 0~2^17-1,unit is cnt
       // the target velocity's unit is rad/s
       // convert the target velocity from rad/s to cnt/s
@@ -211,20 +214,22 @@ void simpletest(char *ifname, char *control_mode, double target_input, double ma
             READ(i, 0x1c13, 1, buf32, "txPDO:1");
 
             READ(i, 0x1604, 0, buf32, "rxPDO:0 1604");
-            READ(i, 0x1a03, 0, buf32, "txPDO:0 1a04");
+            READ(i, 0x1a03, 0, buf32, "txPDO:0 1a03");
             READ(i, 0x1604, 1, buf32, "rxPDO:1 1604");
-            READ(i, 0x1a03, 1, buf32, "txPDO:1 1a04");
+            READ(i, 0x1a03, 1, buf32, "txPDO:1 1a03");
             READ(i, 0x1604, 2, buf32, "rxPDO:2 1604");
-            READ(i, 0x1a03, 2, buf32, "txPDO:2 1a04");
+            READ(i, 0x1a03, 2, buf32, "txPDO:2 1a03");
             READ(i, 0x1604, 3, buf32, "rxPDO:3 1604");
-            READ(i, 0x1a03, 3, buf32, "txPDO:3 1a04");
+            READ(i, 0x1a03, 3, buf32, "txPDO:3 1a03");
             READ(i, 0x1604, 4, buf32, "rxPDO:4 1604");
-            READ(i, 0x1a03, 4, buf32, "txPDO:4 1a04");
+            READ(i, 0x1a03, 4, buf32, "txPDO:4 1a03");
             READ(i, 0x6064, 0, sbuf32, "*position actual value*");
+            READ(i, 0x6080, 0, buf32, "*Max motor speed*");
             WRITE(i, 0x6080, 0, buf32, max_velocity_uint, "*Max motor speed*");
-            usleep(100000);
+            // usleep(100);
             READ(i, 0x6080, 0, buf32, "*Max motor speed*");
          }
+         return;
          /* wait for all sgrl@pse-bc298-dt17:~/repo/SOEM/build/test/linux/slaveinfo$ sudo ./slaveinfo enp3s0
 SOEM (Simple Open EtherCAT Master)
 Slaveinfo
@@ -286,29 +291,29 @@ Slave:1
             {
 
                READ(i, 0x6064, 0, sbuf32, "*position actual value*");
-               READ(i, 0x6077, 0, buf16, "6077 actial r");
+               READ(i, 0x6077, 0, buf16, "Torque actual value");
                READ(i, 0x6041, 0, buf16, "*status word*");
                if (buf16 == 0x218)
                {
                   WRITE(i, 0x6040, 0, buf16, 128, "*control word*");
-                  usleep(50000);
+                  usleep(100000);
                   READ(i, 0x6041, 0, buf16, "*status word*");
                }
 
                WRITE(i, 0x6040, 0, buf16, 0, "*control word*");
-               usleep(50000);
+               usleep(100000);
                READ(i, 0x6041, 0, buf16, "*status word*");
 
                WRITE(i, 0x6040, 0, buf16, 6, "*control word*");
-               usleep(50000);
+               usleep(100000);
                READ(i, 0x6041, 0, buf16, "*status word*");
 
                WRITE(i, 0x6040, 0, buf16, 7, "*control word*");
-               usleep(50000);
+               usleep(100000);
                READ(i, 0x6041, 0, buf16, "*status word*");
 
-               WRITE(i, 0x6040, 0, buf16, 15, "*control word*");
-               usleep(50000);
+               WRITE(i, 0x6040, 0, buf16, 15, "*control word*"); // Fault reset
+               usleep(100000);
                READ(i, 0x6041, 0, buf16, "*status word*");
                // WRITE(i, 0x6060, 0, buf8, 6, "OpMode"); usleep(100000);
 
@@ -328,13 +333,13 @@ Slave:1
                // SET INITAL GOAL
                target[i]->control_word = 0; // stop
                target[i]->maximal_torque = (uint16)(1000000);
-               if (control_mode_uint == 8) // csp
+               if (control_mode_uint == CONTROL_MODE_CSP) // csp
                {
                   // READ(1, 0x6080, 0, buf32, "*max velocity*");
                   // WRITE(1, 0x6080, 0, buf32, 100000, "*max velocity*"); usleep(100000);
                   target[i]->target_position = target_uint;
                }
-               else if (control_mode_uint == 9) // csv
+               else if (control_mode_uint == CONTROL_MODE_CSV) // csv
                {
                   target[i]->target_velocity = target_uint;
                }
