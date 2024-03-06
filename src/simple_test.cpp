@@ -17,6 +17,9 @@
 #include <math.h>
 #include <stdlib.h>
 
+#include <iostream>
+#include <sstream>
+
 #include <ethercattype.h>
 #include <nicdrv.h>
 #include <ethercatbase.h>
@@ -27,12 +30,17 @@
 #include <ethercatconfig.h>
 #include <ethercatprint.h>
 
+
 #define EC_TIMEOUTMON 500
 
 #define NUM_TARGET 6 // num of motors
 
-#define CONTROL_MODE_CSP 8 // position control
-#define CONTROL_MODE_CSV 9 // velocity control
+enum CONTROL_MODE : int8
+{
+   CYCLIC_SYNC_POSITION = 8, // Cyclic sync position mode
+   CYCLIC_SYNC_VELOCITY = 9, // Cyclic sync velocity mode
+   CYCLIC_SYNC_TORQUE = 10   // Cyclic sync torque mode
+};
 
 // double gear_ratio[NUM_TARGET] = {20,20,20,20,10,10};
 
@@ -59,14 +67,37 @@ struct TorqueOut
 // 1a03 TPDO
 struct TorqueIn
 {
-   int32 position_actual_value; // 6064
-   uint32 digital_inputs;       // 60FD
-   int32 velocity_actual_value; // 606C
-   uint16 status_word;          // 6041
+   int32 position_actual; // 6064
+   uint32 digital_inputs; // 60FD
+   int32 velocity_actual; // 606C
+   uint16 status_word;    // 6041
 };
 
-struct TorqueOut *target[NUM_TARGET];
-struct TorqueIn *val[NUM_TARGET];
+struct out_ELMOt              // pdo
+{                             // 1c12
+   int32_t target_position;   // 0x607a
+   int32_t target_velocity;   // 0x60ff
+   int16_t max_torque;        // 0x6072
+   uint16_t control_word;     // 0x6040 pdo domain 0x1604
+   int16_t target_torque;     // 0x6071
+   uint8_t mode_of_operation; // 0x6060
+};
+
+struct in_ELMOt                    // pdo
+{                                  // 1c13
+   int32_t position_actual;        // 0x6064
+   int32_t position_follow_err;    // 0x60f4
+   int16_t torque_actual;          // 0x6077
+   uint16_t status_word;           // 0x6041
+   uint8_t mode_of_operation_disp; // 0x6061
+   int32_t velocity_actual;        // 0x606C
+};
+
+// struct TorqueOut *target[NUM_TARGET];
+// struct TorqueIn *val[NUM_TARGET];
+
+struct out_ELMOt *target[NUM_TARGET];
+struct in_ELMOt *val[NUM_TARGET];
 
 void *ecatprint()
 {
@@ -74,7 +105,7 @@ void *ecatprint()
    while (1)
    {
       //   printf("Main Outputs:  Target: 0x%x, control: 0x%x\n", target->target_position, target->control_word);
-      //   printf("Main Inputs:  Target: 0x%x, control: 0x%x\n", val->position_actual_value, val->status_word);
+      //   printf("Main Inputs:  Target: 0x%x, control: 0x%x\n", val->position_actual, val->status_word);
       // printf("Flag: %d\n", SendFlag);
       SendFlag = !SendFlag;
       // printf("Flag: %d\n", SendFlag);
@@ -100,37 +131,116 @@ void *ecatprint()
       printf("Slave: %d - Write at 0x%04x:%d => wkc: %d; data: 0x%.*x\t{%s}\n", slaveId, idx, sub, __ret, __s, (unsigned int)buf, comment); \
    }
 
+// CA	= FALSE = single subindex. TRUE = Complete Access, all subindexes written
+#define WRITECA(slaveId, idx, sub, buf, value, comment)                                                                                     \
+   {                                                                                                                                        \
+      int __s = sizeof(buf);                                                                                                                \
+      buf = value;                                                                                                                          \
+      int __ret = ec_SDOwrite(slaveId, idx, sub, TRUE, __s, &buf, EC_TIMEOUTRXM);                                                           \
+      printf("Slave: %d - Write at 0x%04x:%d => wkc: %d; data: 0x%.*x\t{%s}\n", slaveId, idx, sub, __ret, __s, (unsigned int)buf, comment); \
+   }
+
 #define CHECKERROR(slaveId)                                                                                                                                                                     \
    {                                                                                                                                                                                            \
       ec_readstate();                                                                                                                                                                           \
       printf("EC> \"%s\" %x - %x [%s] \n", (char *)ec_elist2string(), ec_slave[slaveId].state, ec_slave[slaveId].ALstatuscode, (char *)ec_ALstatuscode2string(ec_slave[slaveId].ALstatuscode)); \
    }
 
-void simpletest(char *ifname, char *control_mode, double target_input, double max_velocity, double gear_ratio)
+int ELMOsetupGOLD(ecx_contextt *context, uint16 slave)
 {
-   // build a struct TorqueOut pointer to the first output byte of the slave
-   // build a struct TorqueIn pointer to the first input byte of the slave
-   uint8_t control_mode_uint;
-   int32_t target_uint;
-   uint32_t max_velocity_uint;
-   target_input *= gear_ratio;
-   max_velocity *= gear_ratio;
-   max_velocity_uint = (uint32_t)(max_velocity / 0.1047); // 1 RPM = 0.10472 rad/s
-   if (strcmp(control_mode, "csp") == 0)
+   int wkc = 0;
+   uint32_t sdoObj = 0x00000000;
+   uint8_t disable_bits = 0x00;
+   uint8_t enable_bits = 0x01;
+   uint16_t objAddr = 0x0000;
+   uint16_t TxAddr = 0x1607; // "RPDO8 Mapping"
+   uint16_t RxAddr = 0x1A07; // "TPDO8 Mapping"
+
+   wkc += ec_SDOwrite(slave, TxAddr, 0x00, FALSE, sizeof(disable_bits), &(disable_bits), EC_TIMEOUTSTATE); // 0 disable
+   sdoObj = 0x607A0020;                                                                                    // Target position, INTEGER32 (0020)
+   wkc += ec_SDOwrite(slave, TxAddr, 0x01, FALSE, sizeof(sdoObj), &(sdoObj), EC_TIMEOUTSTATE);
+   sdoObj = 0x60FF0020; // Target velocity, INTEGER32 (0020)
+   wkc += ec_SDOwrite(slave, TxAddr, 0x02, FALSE, sizeof(sdoObj), &(sdoObj), EC_TIMEOUTSTATE);
+   sdoObj = 0x60720010; // Max torque, UNSIGNED16 (0010)
+   wkc += ec_SDOwrite(slave, TxAddr, 0x03, FALSE, sizeof(sdoObj), &(sdoObj), EC_TIMEOUTSTATE);
+   sdoObj = 0x60400010; // Controlword, UNSIGNED16 (0010)
+   wkc += ec_SDOwrite(slave, TxAddr, 0x04, FALSE, sizeof(sdoObj), &(sdoObj), EC_TIMEOUTSTATE);
+   sdoObj = 0x60710010; // Target torque, INTEGER16 (0010)
+   wkc += ec_SDOwrite(slave, TxAddr, 0x05, FALSE, sizeof(sdoObj), &(sdoObj), EC_TIMEOUTSTATE);
+   sdoObj = 0x60600008; // Modes of operation, INTEGER8 (0008)
+   wkc += ec_SDOwrite(slave, TxAddr, 0x06, FALSE, sizeof(sdoObj), &(sdoObj), EC_TIMEOUTSTATE);
+   enable_bits = 0x06; //            0x00      "Number of sub indexes"  [UNSIGNED8        RWR_R_]      0x06 / 6
+   wkc += ec_SDOwrite(slave, TxAddr, 0x00, FALSE, sizeof(enable_bits), &(enable_bits), EC_TIMEOUTSTATE);
+
+   wkc += ec_SDOwrite(slave, RxAddr, 0x00, FALSE, sizeof(disable_bits), &(disable_bits), EC_TIMEOUTSTATE); // 0 disable
+   sdoObj = 0x60640020;                                                                                    // Position actual value
+   wkc += ec_SDOwrite(slave, RxAddr, 0x01, FALSE, sizeof(sdoObj), &(sdoObj), EC_TIMEOUTSTATE);
+   sdoObj = 0x60F40020; // Following error actual value
+   wkc += ec_SDOwrite(slave, RxAddr, 0x02, FALSE, sizeof(sdoObj), &(sdoObj), EC_TIMEOUTSTATE);
+   sdoObj = 0x60770010; // Torque actual value
+   wkc += ec_SDOwrite(slave, RxAddr, 0x03, FALSE, sizeof(sdoObj), &(sdoObj), EC_TIMEOUTSTATE);
+   sdoObj = 0x60410010; // Statusword
+   wkc += ec_SDOwrite(slave, RxAddr, 0x04, FALSE, sizeof(sdoObj), &(sdoObj), EC_TIMEOUTSTATE);
+   sdoObj = 0x60610008; // Modes of operation display
+   wkc += ec_SDOwrite(slave, RxAddr, 0x05, FALSE, sizeof(sdoObj), &(sdoObj), EC_TIMEOUTSTATE);
+   sdoObj = 0x606C0020; // Additional position actual value
+   wkc += ec_SDOwrite(slave, RxAddr, 0x06, FALSE, sizeof(sdoObj), &(sdoObj), EC_TIMEOUTSTATE);
+   enable_bits = 0x06;
+   wkc += ec_SDOwrite(slave, RxAddr, 0x00, FALSE, sizeof(enable_bits), &(enable_bits), EC_TIMEOUTSTATE);
+
+   // Tx PDO disable      // 0x1c12      "SM2(Outputs) PDO Assignment"
+   wkc += ec_SDOwrite(slave, 0x1c12, 0x00, FALSE, sizeof(disable_bits), &(disable_bits), EC_TIMEOUTSTATE);
+   // Tx PDO dictionary mapping
+   objAddr = TxAddr;
+   wkc += ec_SDOwrite(slave, 0x1c12, 0x01, FALSE, sizeof(objAddr), &(objAddr), EC_TIMEOUTSTATE);
+
+   // Rx PDO disable      // 0x1c13      "SM3(Inputs) PDO Assignment"
+   wkc += ec_SDOwrite(slave, 0x1c13, 0x00, FALSE, sizeof(disable_bits), &(disable_bits), EC_TIMEOUTSTATE);
+   // Rx PDO dictionary mapping
+   objAddr = RxAddr;
+   wkc += ec_SDOwrite(slave, 0x1c13, 0x01, FALSE, sizeof(objAddr), &(objAddr), EC_TIMEOUTSTATE);
+
+   enable_bits = 0x01;
+   wkc += ec_SDOwrite(slave, 0x1c12, 0x00, FALSE, sizeof(enable_bits), &(enable_bits), EC_TIMEOUTSTATE);
+   wkc += ec_SDOwrite(slave, 0x1c13, 0x00, FALSE, sizeof(enable_bits), &(enable_bits), EC_TIMEOUTSTATE);
+
+   int8 op_mode = CONTROL_MODE::CYCLIC_SYNC_POSITION; // 8:position 9:velocity 10:torque
+   // de0x6060      "Modes of operation"
+   wkc += ec_SDOwrite(slave, 0x6060, 0x00, FALSE, sizeof(op_mode), &op_mode, EC_TIMEOUTSTATE); //    cyclic sychronous position mode
+   printf("wkc : %d\n", wkc);
+   printf("supported drive modes: %d\n", op_mode);
+
+   return wkc;
+}
+
+void simpletest(char *ifname, int8_t control_mode_int8, double target_input_in[NUM_TARGET], double max_velocity)
+{
+
+   int32_t target_int32[NUM_TARGET];
+   uint32_t max_velocity_uint[NUM_TARGET];
+   // double gear_ratio = 20 ;
+   double gear_ratio[NUM_TARGET] = {20,20,20,20,10,10};
+   double target_input[NUM_TARGET];
+
+   for (int i = 0; i < NUM_TARGET; i++)
    {
-      control_mode_uint = CONTROL_MODE_CSP;
+      target_input[i]=target_input_in[i]*gear_ratio[i];
+      max_velocity_uint[i] = (uint32_t)(max_velocity*gear_ratio[i] / 0.10472); // 1 RPM = 0.10472 rad/s
+      printf("%d %d \n ",i, max_velocity_uint[i]);
+   }
+   // return;
+
+
+   
+   if ((control_mode_int8 == CONTROL_MODE::CYCLIC_SYNC_POSITION)|| control_mode_int8 == CONTROL_MODE::CYCLIC_SYNC_VELOCITY)
+   {
       // the range of encoder is 0~2^17-1,unit is cnt (count)
       // the target position's unit is rad
       // convert the target position from rad to cnt
-      target_uint = (int32_t)(target_input * 131071 / (2 * M_PI));
-   }
-   else if (strcmp(control_mode, "csv") == 0)
-   {
-      control_mode_uint = CONTROL_MODE_CSV;
-      // the range of encoder is 0~2^17-1,unit is cnt
-      // the target velocity's unit is rad/s
-      // convert the target velocity from rad/s to cnt/s
-      target_uint = (int32_t)(target_input * 131071 / (2 * M_PI));
+      for (int i = 0; i < NUM_TARGET; i++)
+      {
+         target_int32[i] = (int32_t)(target_input[i] * 131072 / (2 * M_PI));
+      }
    }
 
    // target = (struct TorqueOut*)(ec_slave[1].outputs);
@@ -149,9 +259,25 @@ void simpletest(char *ifname, char *control_mode, double target_input, double ma
    {
       printf("ec_init on %s succeeded.\n", ifname);
       /* find and auto-config slaves */
+      for (size_t i = 0; i < NUM_TARGET; i++)
+      {
+         ec_slave[1 + i].PO2SOconfigx = &ELMOsetupGOLD; 
+      }
 
       if (ec_config_init(FALSE) > 0)
       {
+
+         ec_configdc();
+         usleep(100000);
+         for (int i = 1; i <= ec_slavecount; i++)
+         {
+            if (ELMOsetupGOLD(&ecx_context,i) != 23)
+            {
+               printf("error \n");
+               exit(1);
+            };
+         }
+
          printf("%d slaves found and configured.\n", ec_slavecount);
 
          if (forceByteAlignment)
@@ -163,7 +289,9 @@ void simpletest(char *ifname, char *control_mode, double target_input, double ma
             ec_config_map(&IOmap);
          }
 
-         ec_configdc();
+         /* wait for all slaves to reach SAFE_OP state */
+         ec_statecheck(0, EC_STATE_PRE_OP, EC_TIMEOUTSTATE * 4);
+
          // show slave info
          for (int i = 1; i <= ec_slavecount; i++)
          {
@@ -184,68 +312,61 @@ void simpletest(char *ifname, char *control_mode, double target_input, double ma
          /** set PDO mapping */
          /** opMode: 8  => csp */
          /** opMode: 9  => csv */
-         for (int i = 1; i <= ec_slavecount; i++)
+         for (int i = 0; i < ec_slavecount; i++)
          {
-            WRITE(i, 0x6060, 0, buf8, control_mode_uint, "OpMode");
-            READ(i, 0x6061, 0, buf8, "OpMode display");
+            READ(i+1, 0x1a03, 0, buf32, "rxPDO:0 1604");
+            WRITE(i+1, 0x6060, 0, buf8, control_mode_int8, "OpMode");
+            READ(i+1, 0x6061, 0, buf8, "OpMode display");
 
-            READ(i, 0x1c12, 0, buf32, "rxPDO:0");
-            READ(i, 0x1c13, 0, buf32, "txPDO:0");
+            READ(i+1, 0x1c12, 0, buf32, "rxPDO:0");
+            READ(i+1, 0x1c13, 0, buf32, "txPDO:0");
 
-            READ(i, 0x1c12, 1, buf32, "rxPDO:1");
-            READ(i, 0x1c13, 1, buf32, "txPDO:1");
+            READ(i+1, 0x1c12, 1, buf32, "rxPDO:1");
+            READ(i+1, 0x1c13, 1, buf32, "txPDO:1");
          }
 
-         int32 ob2;
-         int os;
-         for (int i = 1; i <= ec_slavecount; i++)
+         // int32 ob2;
+         // int os;
+         for (int i = 0; i < ec_slavecount; i++)
          {
-            os = sizeof(ob2);
-            ob2 = 0x16040001;
-            ec_SDOwrite(i, 0x1c12, 0, TRUE, os, &ob2, EC_TIMEOUTRXM);
-            os = sizeof(ob2);
-            ob2 = 0x1a030001;
-            ec_SDOwrite(i, 0x1c13, 0, TRUE, os, &ob2, EC_TIMEOUTRXM);
+            // os = sizeof(ob2);
+            // ob2 = 0x16040001;
+            // ec_SDOwrite(i+1, 0x1c12, 0, TRUE, os, &ob2, EC_TIMEOUTRXM);
+            // os = sizeof(ob2);
+            // ob2 = 0x1a030001;
+            // ec_SDOwrite(i+1, 0x1c13, 0, TRUE, os, &ob2, EC_TIMEOUTRXM);
 
-            READ(i, 0x1c12, 0, buf32, "rxPDO:0");
-            READ(i, 0x1c13, 0, buf32, "txPDO:0");
+            READ(i+1, 0x1a07, 0, buf8, "txPDO:7");
+            READ(i+1, 0x1c12, 0, buf32, "rxPDO:0");
+            READ(i+1, 0x1c13, 0, buf32, "txPDO:0");
 
-            READ(i, 0x1c12, 1, buf32, "rxPDO:1");
-            READ(i, 0x1c13, 1, buf32, "txPDO:1");
+            READ(i+1, 0x1c12, 1, buf32, "rxPDO:1");
+            READ(i+1, 0x1c13, 1, buf32, "txPDO:1");
 
-            READ(i, 0x1604, 0, buf32, "rxPDO:0 1604");
-            READ(i, 0x1a03, 0, buf32, "txPDO:0 1a03");
-            READ(i, 0x1604, 1, buf32, "rxPDO:1 1604");
-            READ(i, 0x1a03, 1, buf32, "txPDO:1 1a03");
-            READ(i, 0x1604, 2, buf32, "rxPDO:2 1604");
-            READ(i, 0x1a03, 2, buf32, "txPDO:2 1a03");
-            READ(i, 0x1604, 3, buf32, "rxPDO:3 1604");
-            READ(i, 0x1a03, 3, buf32, "txPDO:3 1a03");
-            READ(i, 0x1604, 4, buf32, "rxPDO:4 1604");
-            READ(i, 0x1a03, 4, buf32, "txPDO:4 1a03");
-            READ(i, 0x6064, 0, sbuf32, "*position actual value*");
-            READ(i, 0x6080, 0, buf32, "*Max motor speed*");
-            WRITE(i, 0x6080, 0, buf32, max_velocity_uint, "*Max motor speed*");
-            // usleep(100);
-            READ(i, 0x6080, 0, buf32, "*Max motor speed*");
+            READ(i+1, 0x1604, 0, buf32, "rxPDO:0 1604");
+            READ(i+1, 0x1a07, 0, buf32, "txPDO:0 0x1a07");
+            READ(i+1, 0x1604, 1, buf32, "rxPDO:1 1604");
+            READ(i+1, 0x1a07, 1, buf32, "txPDO:1 0x1a07");
+            READ(i+1, 0x1604, 2, buf32, "rxPDO:2 1604");
+            READ(i+1, 0x1a07, 2, buf32, "txPDO:2 0x1a07");
+            READ(i+1, 0x1604, 3, buf32, "rxPDO:3 1604");
+            READ(i+1, 0x1a07, 3, buf32, "txPDO:3 0x1a07");
+            READ(i+1, 0x1604, 4, buf32, "rxPDO:4 1604");
+            READ(i+1, 0x1a07, 4, buf32, "txPDO:4 0x1a07");
+            READ(i+1, 0x6064, 0, sbuf32, "*position actual value*");
+            READ(i+1, 0x6080, 0, buf32, "*Max motor speed*");
+            WRITE(i+1, 0x6080, 0, buf32, max_velocity_uint[i], "*Max motor speed*");
+            usleep(100);
+            READ(i+1, 0x6080, 0, buf32, "*Max motor speed*");
          }
-         return;
-         /* wait for all sgrl@pse-bc298-dt17:~/repo/SOEM/build/test/linux/slaveinfo$ sudo ./slaveinfo enp3s0
-SOEM (Simple Open EtherCAT Master)
-Slaveinfo
-Starting slaveinfo
-ec_init on enp3s0 succeeded.
-2 slaves found and configured.
-Calculated workcounter 6
-
-Slave:1
- Name:? M:0000009a I:00030924laves to reach SAFE_OP state */
+         //  return;
+         /* wait for all slaves to reach SAFE_OP state */
          ec_statecheck(0, EC_STATE_SAFE_OP, EC_TIMEOUTSTATE * 4);
 
          for (size_t i = 0; i < NUM_TARGET; i++)
          {
-            target[i] = (struct TorqueOut *)(ec_slave[1 + i].outputs);
-            val[i] = (struct TorqueIn *)(ec_slave[1 + i].inputs);
+            target[i] = (struct out_ELMOt *)(ec_slave[1 + i].outputs);
+            val[i] = (struct in_ELMOt *)(ec_slave[1 + i].inputs);
          }
 
          oloop = ec_slave[0].Obytes;
@@ -332,16 +453,16 @@ Slave:1
             {
                // SET INITAL GOAL
                target[i]->control_word = 0; // stop
-               target[i]->maximal_torque = (uint16)(1000000);
-               if (control_mode_uint == CONTROL_MODE_CSP) // csp
+               target[i]->max_torque = (uint16)(1000000);
+               if (control_mode_int8 == CONTROL_MODE::CYCLIC_SYNC_POSITION) // csp
                {
                   // READ(1, 0x6080, 0, buf32, "*max velocity*");
                   // WRITE(1, 0x6080, 0, buf32, 100000, "*max velocity*"); usleep(100000);
-                  target[i]->target_position = target_uint;
+                  target[i]->target_position = target_int32[i];
                }
-               else if (control_mode_uint == CONTROL_MODE_CSV) // csv
+               else if (control_mode_int8 == CONTROL_MODE::CYCLIC_SYNC_VELOCITY) // csv
                {
-                  target[i]->target_velocity = target_uint;
+                  target[i]->target_velocity = target_int32[i];
                }
             }
 
@@ -355,14 +476,15 @@ Slave:1
                if (wkc >= expectedWKC)
                {
 
-                  for (size_t j = 0; j < NUM_TARGET; j++)
+                  for (int j = 0; j < NUM_TARGET; j++)
                   {
-                     printf("Processdata cycle %4d, WKC %d,", i, wkc);
-                     printf("pos: %f, vel: %f,pos err: %f, vel err: %f,  status: 0x%x, control: 0x%x",
-                            (double)val[j]->position_actual_value / gear_ratio * (2 * M_PI) / 131071,
-                            (double)val[j]->velocity_actual_value / gear_ratio * (2 * M_PI) / 131071,
-                            (double)(target[j]->target_position - val[j]->position_actual_value) / gear_ratio * (2 * M_PI) / 131071,
-                            (double)(target[j]->target_velocity - val[j]->velocity_actual_value) / gear_ratio * (2 * M_PI) / 131071,
+                     printf("cycle %4d, WKC %d, motor %d", i, wkc, j);
+                     printf("pos: %f, vel: %f, torque: %f pos err: %f, vel err: %f,  status: 0x%x, control: 0x%x",
+                            (double)val[j]->position_actual / gear_ratio[j] * (2 * M_PI) / 131071,
+                            (double)val[j]->velocity_actual / gear_ratio[j] * (2 * M_PI) / 131071,
+                            (double)val[j]->torque_actual * 27720. / 1000000. * 2.,
+                            (double)(target[j]->target_position - val[j]->position_actual) / gear_ratio[j] * (2 * M_PI) / 131071,
+                            (double)(target[j]->target_velocity - val[j]->velocity_actual) / gear_ratio[j] * (2 * M_PI) / 131071,
                             val[j]->status_word, target[j]->control_word);
 
                      switch (target[j]->control_word)
@@ -522,13 +644,39 @@ void ecatcheck(void *ptr)
    }
 }
 
+void parse_doubles(char* input, double output_array[NUM_TARGET]) {
+    std::stringstream ss(input); 
+    int count = 0;
+
+    while (ss.good() && count < NUM_TARGET) { 
+        std::string substr;
+        getline(ss, substr, ',');
+
+        double value;
+        std::istringstream iss(substr);
+        if (!(iss >> value)) {
+            throw std::runtime_error("Invalid number format in input string");
+        }
+
+        output_array[count] = value; 
+        count++;
+    }
+    // Initialize remaining elements to 0.0, if necessary
+    for (int i = count; i < NUM_TARGET; ++i) {
+        output_array[i] = 0.0;
+    }
+}
+
 int main(int argc, char *argv[])
-{
+{  
    printf("SOEM (Simple Open EtherCAT Master)\nSimple test\n");
    // get arguments from command line, contains the adapter,type of control mode: csp, csv,target position or target velocity,
    // if is csp mode, the second argument is the target position, if is csv mode, the second argument is the target velocity
    // if there is no argument, the program will print the available control mode and exit
-   if (argc < 6)
+   
+   int8_t control_mode_int8;
+
+   if (argc < 5)
    {
       // print argc and all argv
       printf("argc: %d\n", argc);
@@ -557,16 +705,19 @@ int main(int argc, char *argv[])
    else
    {
       if (strcmp(argv[2], "csp") == 0)
-      {
+      {  
+         control_mode_int8 = CONTROL_MODE::CYCLIC_SYNC_POSITION;
          printf("Control mode: csp\n");
          // print the target position,which is double,unit is rad
          double target_position = atof(argv[3]);
          double max_velocity = atof(argv[4]);
          printf("Target position: %f rad\n", target_position);
          printf("Max velocity: %f rad/s \n", max_velocity);
+
       }
       else if (strcmp(argv[2], "csv") == 0)
-      {
+      {  
+         control_mode_int8 = CONTROL_MODE::CYCLIC_SYNC_VELOCITY;
          printf("Control mode: csv\n");
          // print the target velocity,which is double,unit is rad/s
          double target_velocity = atof(argv[3]);
@@ -580,9 +731,33 @@ int main(int argc, char *argv[])
          return (0);
       }
    }
+
+
+   double target_input_in[NUM_TARGET];
+    try {
+        parse_doubles(argv[3], target_input_in);
+
+        // Print results
+        std::cout << "Output array: {";
+        for (int i = 0; i < NUM_TARGET; ++i) {
+            std::cout << target_input_in[i];
+            if (i != NUM_TARGET - 1) {
+                std::cout << ", ";
+            }
+        }
+        std::cout << "}\n";
+
+    } catch (const std::runtime_error& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1; // Indicate failure
+   }
+   // return 0;
+
    osal_thread_create(&thread1, 128000, (void *)(&ecatcheck), NULL);
 
-   simpletest(argv[1], argv[2], atof(argv[3]), atof(argv[4]), atof(argv[5]));
+   simpletest(argv[1], control_mode_int8, target_input_in, atof(argv[4]));
    printf("End program\n");
    return (0);
 }
+//sudo ./simple_test enp3s0 csv 0.1,0.2,0.4,0.8,0.1,0.2 1
+// sudo ./simple_test enp3s0 csp 0,0,0,0,0,0 1
