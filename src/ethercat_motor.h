@@ -39,6 +39,9 @@
 
 constexpr double gear_ratio[] = {20, 20, 20, 20, 10, 10}; // 6
 // double gear_ratio[] = {1,1,1,1,1,1}; // hack changeback
+constexpr double torque_multiplier[] = {1, 1, 1, 1, 1, 1}; // 6
+// constexpr double torque_multiplier[] = {0, 0, 0, 0, 0, 1}; // 6
+
 
 char IOmap[4096];
 
@@ -223,8 +226,8 @@ public:
 
         for (int i = 0; i < NUM_TARGET; i++)
         {
-            // target_input_rotor[i] = target_input_in[i] * gear_ratio[i];
-            target_input_rotor[i] = target_input_in[i] * gear_ratio[i]*M_PI*2;
+            target_input_rotor[i] = target_input_in[i] * gear_ratio[i]; // rad
+            // target_input_rotor[i] = target_input_in[i] * gear_ratio[i]*M_PI*2; // 2pi rad
             max_velocity_uint[i] = (uint32_t)(max_velocity * gear_ratio[i] / 0.10472); // 1 RPM = 0.10472 rad/s
             printf("%d %d \n ", i, max_velocity_uint[i]);
         }
@@ -358,7 +361,7 @@ public:
                     WRITE(i + 1, 0x6060, 0, buf8, control_mode_int8, "OpMode");
                     READ(i + 1, 0x6061, 0, buf8, "OpMode display");
                     WRITE(i + 1, 0x6080, 0, buf32, max_velocity_uint[i], "*Max motor speed*");
-                    WRITE(i + 1, 0x6072, 0, buf16, (uint16)max_torque, "*Maximal torque*"); // per thousand of rated torque
+                    WRITE(i + 1, 0x6072, 0, buf16, (uint16)(max_torque*torque_multiplier[i]), "*Maximal torque*"); // per thousand of rated torque
 
                     // READ(i + 1, 0x1604, 0, buf32, "rxPDO:0 1604");
                     // READ(i + 1, 0x1a07, 0, buf32, "txPDO:0 0x1a07");
@@ -463,7 +466,7 @@ public:
                         {
                             // SET INITAL GOAL
                         target[i]->control_word = 0; // stop
-                        target[i]->max_torque = (uint16)(1000000);
+                        target[i]->max_torque = (uint16)(max_torque*torque_multiplier[i]);
                         if (control_mode_int8 == CONTROL_MODE::CYCLIC_SYNC_POSITION) // csp
                         {
                             // READ(1, 0x6080, 0, buf32, "*max velocity*");
@@ -483,7 +486,7 @@ public:
 
                     // target->target_velocity = (int32)(100000);
                     // target->target_position = (int32)(2620039);
-                    for (i = 1; i <= 5000; i++) // TODO CHANGE
+                    for (i = 1; i <= 50000; i++) // TODO CHANGE
                     {
                         ec_send_processdata();
                         wkc = ec_receive_processdata(EC_TIMEOUTRET);
