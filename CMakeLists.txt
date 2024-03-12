@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.10 )  # Adjust version as needed
 
 project(biped 
     LANGUAGES C CXX)
+set (CMAKE_CXX_STANDARD 17)
 
 # # Enable compiler caching
 # set(CMAKE_CXX_COMPILER_LAUNCHER ccache)
@@ -26,6 +27,8 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/__init__.py") # Creates an empty file
 
 find_package(msgpack-cxx CONFIG REQUIRED)
 # target_link_libraries(main PRIVATE msgpack-cxx)
+find_package(asio CONFIG REQUIRED)
+# target_link_libraries(main PRIVATE asio::asio)
 
 find_package(pybind11 REQUIRED)
 find_package(Threads REQUIRED)
@@ -37,21 +40,28 @@ add_subdirectory(SOEM)
 add_executable(simple_test 
             src/simple_test.cpp
             src/ethercat_motor.h
+            src/network.cpp
+            src/network.h
             )
-
 # Link your executable against the SOEM library
 target_link_libraries(simple_test PUBLIC soem)  # 'soem' is the target created by add_subdirectory
-
-# Specify SOEM header location for your project
+target_link_libraries(simple_test PUBLIC msgpack-cxx) 
+target_link_libraries(simple_test PUBLIC asio::asio)
 target_include_directories(simple_test PUBLIC SOEM)
+# target_link_libraries(simple_test PUBLIC pybind11::module)
+# target_include_directories(simple_test PUBLIC ${pybind11_INCLUDE_DIRS})
 
 
-# pybind11_add_module(ethercat_motor_py 
-#     src/ethercat_motor_py.cpp
-#     src/ethercat_motor.h
-# )
-# target_link_libraries(ethercat_motor_py PRIVATE soem) 
-# target_include_directories(ethercat_motor_py PRIVATE SOEM)
+pybind11_add_module(ethercat_motor_py 
+    src/ethercat_motor_py.cpp
+    src/ethercat_motor.h
+)
+target_link_libraries(ethercat_motor_py PUBLIC msgpack-cxx) 
+
+target_link_libraries(ethercat_motor_py PRIVATE soem) 
+target_include_directories(ethercat_motor_py PRIVATE SOEM)
+target_link_libraries(ethercat_motor_py PUBLIC pybind11::module)
+target_include_directories(ethercat_motor_py PUBLIC ${pybind11_INCLUDE_DIRS})
 
 
 pybind11_add_module(pybind_test src/pybind_test.cpp)

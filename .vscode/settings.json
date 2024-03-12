@@ -68,7 +68,13 @@
         "typeinfo": "cpp",
         "variant": "cpp",
         "complex": "cpp",
-        "csignal": "cpp"
+        "csignal": "cpp",
+        "any": "cpp",
+        "coroutine": "cpp",
+        "source_location": "cpp",
+        "future": "cpp",
+        "span": "cpp",
+        "valarray": "cpp"
     },
     // https://github.com/microsoft/vscode-cmake-tools/blob/main/docs/cmake-settings.md
     "cmake.generator":"Ninja",

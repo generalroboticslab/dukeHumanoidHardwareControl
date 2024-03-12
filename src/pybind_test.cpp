@@ -1,92 +1,96 @@
-// #include <pybind11/pybind11.h>
-
-// int add(int i, int j) {
-//     return i + j;
-// }
-
-// namespace py = pybind11;
-// using namespace py;
-// PYBIND11_MODULE(pybind_test, m) { //name has to match the name of the .cpp file
-//     m.doc() = "Example pybind11 module";
-//     m.def("add", &add, "A function that adds two numbers");
-// }
-
 #include <pybind11/pybind11.h>
+#include <pybind11/chrono.h>
+#include <pybind11/stl.h>
+#include <pybind11/stl_bind.h>
+#include <pybind11/numpy.h>
 #include <thread>
 #include <chrono>
 #include <iostream>
-#include <csignal>
 #include <atomic>
 
 namespace py = pybind11;
 
-volatile sig_atomic_t should_terminate_{false}; // Atomic for thread safety
-void signal_handler(int signal)
-{
-    if (signal == SIGINT)
-    {
-        should_terminate_ = true;
-    }
-}
-
-class Worker
+class BackgroundWorker
 {
 public:
-    Worker() : is_running_(false) {}
-    ~Worker() { std::cout << "deconstruction called\n"; }
-    void start_work(int duration)
+    std::chrono::system_clock::time_point t;
+    std::vector<int> data_vector{1, 2, 3};
+
+    BackgroundWorker() = default; // Default constructor
+    BackgroundWorker(const std::string &ifname_, int8_t control_mode_int8, double max_velocity, double max_torque)
     {
-        if (!is_running_)
-        {
-            is_running_ = true;
-            thread_ = std::thread(&Worker::do_work, this, duration);
-        }
+        std::cout << "BackgroundWorker(int k)" << std::endl;
+        std::cout << "ifname_:" << ifname_ << std::endl;
+        std::cout << "control_mode_int8:" << (int)control_mode_int8 << std::endl;
+        std::cout << "max_velocity:" << max_velocity << std::endl;
+        std::cout << "max_torque:" << max_torque << std::endl;
     }
 
-    void stop_work()
+    void start_background_thread(int duration)
     {
-        if (is_running_)
-        {
-            std::cout << "stop_work" << std::endl;
+        py::gil_scoped_release release;
+        worker_thread_ = std::thread(&BackgroundWorker::background_worker, this, duration);
+        worker_thread_.detach();
+    }
 
-            should_terminate_ = true; // Set the termination flag
-            if (thread_.joinable())
-            {
-                thread_.join();
-            }
-            is_running_ = false; // Reset running state after termination
+    void set_should_terminate(bool value)
+    {
+        should_terminate = value;
+        std::cout << "set_should_terminate()" << std::endl;
+    }
+    void change_data_vector(const py::array_t<int> &a)
+    {
+        for (int i = 0; i < 3; i++)
+        {
+            data_vector[i] = a.at(i);
         }
     }
 
 private:
-    void do_work(int duration)
+    void background_worker(int duration)
     {
-        // py::gil_scoped_release release;
-        std::signal(SIGINT, signal_handler); // Pass the static function
-
-        for (int i = 0; i < duration && !should_terminate_; i++)
+        for (int i = 0; i < duration && !should_terminate; i++)
         {
-            py::gil_scoped_release release; // Temporarily release GIL
-            // Check flag
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            std::cout << "do_work: " << i + 1 << std::endl;
-
-            py::gil_scoped_acquire acquire; // Reacquire GIL
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            t = std::chrono::system_clock::now();
+            data_vector[2] = i;
+            std::cout << "Background thread running: " << i << std::endl;
         }
-        is_running_ = false;
-
-        // py::gil_scoped_acquire acquire;
+        std::cout << "Background thread terminating..." << std::endl;
     }
 
-    std::thread thread_;
-    bool is_running_;
+    std::atomic<bool> should_terminate{false};
+    std::thread worker_thread_;
 };
 
 PYBIND11_MODULE(pybind_test, m)
-{ // Module name must match your CMake file
-    m.doc() = "Example pybind11 module for the Worker class";
-    py::class_<Worker, std::unique_ptr<Worker, py::nodelete>>(m, "Worker") // Bind the Worker class
-        .def(py::init<>())                                                 // Constructor
-        .def("start_work", &Worker::start_work)
-        .def("stop_work", &Worker::stop_work);
+{
+    py::class_<BackgroundWorker>(m, "BackgroundWorker", py::dynamic_attr())
+        .def(py::init<>()) // Expose the constructor
+        .def(py::init<const std::string &, int8_t,double,double>())
+        .def_readonly("t", &BackgroundWorker::t)
+        .def_readwrite("data_vector", &BackgroundWorker::data_vector)
+        .def("change_data_vector", &BackgroundWorker::change_data_vector)
+        .def("start_background_thread", &BackgroundWorker::start_background_thread)
+        .def("set_should_terminate", &BackgroundWorker::set_should_terminate);
 }
+
+// #include <pybind11/pybind11.h>
+
+// namespace py = pybind11;
+
+// class MyClass {
+// public:
+//     MyClass(const std::string& name) : name_(name) {}
+
+//     std::string get_name() const { return name_; }
+
+// private:
+//     std::string name_;
+// };
+
+// PYBIND11_MODULE(mymodule, m) {
+//   py::class_<MyClass>(m, "MyClass")
+//       .def(py::init<const std::string&>())  // Constructor with std::string argument
+//       .def("get_name", &MyClass::get_name);
+// }

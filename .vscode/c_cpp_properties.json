@@ -3,7 +3,10 @@
         {
             "name": "Linux",
             "includePath": [
-                "${workspaceFolder}/**"
+                "${workspaceFolder}/**",
+                "/home/grl/repo/micromamba/envs/py38/include/**",
+                "/home/grl/repo/micromamba/envs/py38/include",
+                "${workspaceFolder}/SOEM/soem"
             ],
             "defines": [],
             "compilerPath": "/usr/bin/gcc",

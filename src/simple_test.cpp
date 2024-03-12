@@ -122,7 +122,13 @@ int main(int argc, char *argv[])
       printf("\nMax velocity: %f rad/s \n", max_velocity);
       // return (0);
 
-      Motor motor(argv[1], control_mode, target_input_in, max_velocity,max_torque);
+      Motor motor(argv[1], control_mode, max_velocity,max_torque);
+      motor.set_target_input(target_input_in);
+      
+      if (argc == 7){
+         motor.set_target_offset(parse_doubles(argv[6]));
+      }
+      
       motor.run();
 
       printf("End program\n");

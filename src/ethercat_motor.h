@@ -182,22 +182,28 @@ class Motor
 {
 
 public:
-    int32_t target_int32[NUM_TARGET];
+    std::array<int32_t, NUM_TARGET> target_int32{};
+
+    std::array<int32_t, NUM_TARGET> target_offset{};
+
     uint32_t max_velocity_uint[NUM_TARGET];
     double target_input_rotor[NUM_TARGET]; // scaled by the gear ratio
     std::string ifname;                    // use ifconfig in commandline to find the ethernet name
 
     int8_t control_mode_int8;
-    double max_velocity=0;
-    double max_torque=0;
+    double max_velocity = 0;
+    double max_torque = 0;
     struct out_ELMOt *target[NUM_TARGET];
     struct in_ELMOt *val[NUM_TARGET];
+
+    bool should_print = true;
 
     // OSAL_THREAD_HANDLE thread1; // ecatcheck
     // OSAL_THREAD_HANDLE thread2;
 
     std::thread thread1;
     std::thread thread2;
+    std::atomic<bool> should_terminate{false};
 
     // Motor()
     // {
@@ -218,44 +224,37 @@ public:
     // }
     
     Motor(const std::string ifname_, int8_t control_mode_int8_, std::vector<double> target_input_in, double max_velocity_, double max_torque_)
+
+    Motor()
+    {
+        std::string ifname = "enp3s0";
+        // std::vector<double> target_input_in{0, 0, 0, 0, 0, 0};
+        double max_velocity = 0.5;
+        double max_torque = 20;
+        double control_mode_int8 = CONTROL_MODE::CYCLIC_SYNC_VELOCITY;
+        _init(ifname, control_mode_int8, max_velocity, max_torque);
+    }
+
+    Motor(const std::string &ifname, int8_t control_mode_int8, double max_velocity, double max_torque)
+    {
+        _init(ifname, control_mode_int8, max_velocity, max_torque);
+    }
+
+    void _init(const std::string &ifname_, int8_t control_mode_int8_, double max_velocity_, double max_torque_)
     {
         ifname = ifname_;
         control_mode_int8 = control_mode_int8_;
         max_velocity = max_velocity_;
-        max_torque=max_torque_;
-
+        max_torque = max_torque_;
         for (int i = 0; i < NUM_TARGET; i++)
         {
-            target_input_rotor[i] = target_input_in[i] * gear_ratio[i]; // rad
-            // target_input_rotor[i] = target_input_in[i] * gear_ratio[i]*M_PI*2; // 2pi rad
             max_velocity_uint[i] = (uint32_t)(max_velocity * gear_ratio[i] / 0.10472); // 1 RPM = 0.10472 rad/s
             printf("%d %d \n ", i, max_velocity_uint[i]);
         }
-
     }
 
-    // ~Motor()
-    // {
-    //    // pthread_detach(*thread1);
-    //    thread1.join();
-    //    thread2.join();
-    // }
-    void run()
+    void set_target_input(std::vector<double> target_input_in)
     {
-        // ecatcheck(nullptr); // works
-        // _run();
-        thread1 = std::thread(&Motor::ecatcheck, this, nullptr);
-        // thread2 = std::thread(&Motor::_run, this);
-
-        // osal_thread_create(&thread1, 128000, (void *)(&ecatcheck), NULL);
-        _run();
-    }
-
-    void _run()
-    {
-
-        // return;
-
         if ((control_mode_int8 == CONTROL_MODE::CYCLIC_SYNC_POSITION) || control_mode_int8 == CONTROL_MODE::CYCLIC_SYNC_VELOCITY)
         {
             // the range of encoder is 0~2^17-1,unit is cnt (count)
@@ -263,19 +262,181 @@ public:
             // convert the target position from rad to cnt
             for (int i = 0; i < NUM_TARGET; i++)
             {
+                target_input_rotor[i] = (target_input_in[i] + target_offset[i]) * gear_ratio[i]; // rad
                 target_int32[i] = (int32_t)(target_input_rotor[i] * 131072 / (2 * M_PI));
-
-                // //HACK todo CHANGE BACK
-                // target_int32[i] = (int32_t)(target_input_rotor[i] * 131072);
             }
         }
         else if (control_mode_int8 == CONTROL_MODE::CYCLIC_SYNC_TORQUE)
         {
             for (int i = 0; i < NUM_TARGET; i++)
             {
-                target_int32[i] = (int32_t)(target_input_rotor[i]);
+                target_int32[i] = (int32_t)(target_input_rotor[i]); // NO offset applied
             }
         }
+    }
+
+    ~Motor()
+    {
+        should_terminate = true;
+        // pthread_detach(*thread1);
+        if (thread1.joinable())
+        {
+            thread1.join();
+        }
+        if (thread2.joinable())
+        {
+            thread2.join();
+        }
+        //    udp_server.close();
+    }
+
+    void set_should_terminate(bool value)
+    {
+        should_terminate = value;
+        std::cout << "set_should_terminate()" << std::endl;
+    }
+
+    void set_target_offset(std::vector<double> target_offset)
+    {
+        for (int i = 0; i < NUM_TARGET; i++)
+        {
+            // target_input_rotor[i] += target_offset[i] * gear_ratio[i]; // rad
+            this->target_offset[i] = target_offset[i];
+        }
+    }
+
+    void run()
+    {
+        // ecatcheck(nullptr); // works
+        // _run();
+        thread1 = std::thread(&Motor::ecatcheck, this, nullptr);
+        // thread2 = std::thread(&Motor::_run, this);
+
+
+        // osal_thread_create(&thread1, 128000, (void *)(&ecatcheck), NULL);
+        _run();
+    }
+
+    void _run_loop()
+    {
+
+        /* cyclic loop for slaves*/
+
+        for (size_t i = 0; i < NUM_TARGET; i++)
+        {
+            // SET INITAL GOAL
+            // target[i]->control_word = 0; // stop
+            target[i]->max_torque = (uint16)(max_torque * torque_multiplier[i]);
+            if (control_mode_int8 == CONTROL_MODE::CYCLIC_SYNC_POSITION) // csp
+            {
+                // READ(1, 0x6080, 0, buf32, "*max velocity*");
+                // WRITE(1, 0x6080, 0, buf32, 100000, "*max velocity*"); usleep(100000);
+                target[i]->target_position = target_int32[i];
+            }
+            else if (control_mode_int8 == CONTROL_MODE::CYCLIC_SYNC_VELOCITY) // csv
+            {
+                target[i]->target_velocity = target_int32[i];
+                // target[i]->velocity_offset = 10000;//example of adding velocity offset
+            }
+            // else if (control_mode_int8 == CONTROL_MODE::CYCLIC_SYNC_TORQUE) // csv
+            // {
+            //    target[i]->torque_offset = 30;
+            // }
+        }
+
+        // target->target_velocity = (int32)(100000);
+        // target->target_position = (int32)(2620039);
+
+        ec_send_processdata();
+        wkc = ec_receive_processdata(EC_TIMEOUTRET);
+        //  printf("Processdata cycle %4d, WKC %d,EWKC %d", i, wkc,expectedWKC);
+        if (wkc >= expectedWKC)
+        {
+            if (should_print)
+            {
+                printf("\npos:");
+                for (int j = 0; j < NUM_TARGET; j++)
+                {
+                    printf("%8.5f,", (double)(val[j]->position_actual) / gear_ratio[j] * (2 * M_PI) / 131072);
+                }
+                printf("\nprr:"); // posotion error
+                for (int j = 0; j < NUM_TARGET; j++)
+                {
+                    printf("%8.5f,", (double)(val[j]->position_follow_err) / gear_ratio[j] * (2 * M_PI) / 131072);
+                }
+                printf("\nvel:");
+                for (int j = 0; j < NUM_TARGET; j++)
+                {
+                    printf("%8.5f,", (double)(val[j]->velocity_actual) / gear_ratio[j] * (2 * M_PI) / 131072);
+                }
+                printf("\ntor:"); // torque raw
+                for (int j = 0; j < NUM_TARGET; j++)
+                {
+                    printf("%8d,", val[j]->torque_actual);
+                }
+            }
+
+            for (int j = 0; j < NUM_TARGET; j++)
+            {
+                // printf("cycle %4d, WKC %d, motor %d ", i, wkc, j);
+                // printf("pos: %8.5f, pos err: %8.5f, vel: %7.3f, torque: %7.3f , status_word: %x, op_mode: %x \n",
+                //        (double)(val[j]->position_actual) / gear_ratio[j] * (2 * M_PI) / 131072,
+                //        (double)(val[j]->position_follow_err) / gear_ratio[j] * (2 * M_PI) / 131072,
+                //        (double)(val[j]->velocity_actual) / gear_ratio[j] * (2 * M_PI) / 131072,
+                //        (double)val[j]->torque_actual * 27720. / 1000000. * 2.,
+                //        val[j]->status_word,
+                //        val[j]->mode_of_operation_disp);
+                switch (target[j]->control_word)
+                {
+                case 0:
+                    target[j]->control_word = 6;
+                    break;
+                case 6:
+                    target[j]->control_word = 7;
+                    break;
+                case 7:
+                    target[j]->control_word = 15;
+                    break;
+                case 128:
+                    target[j]->control_word = 0;
+                    break;
+                default:
+                    if (val[j]->status_word >> 3 & 0x01)
+                    {
+                        uint8 buf8;
+                        // READ(1, 0x1001, 0, buf8, "Error");
+                        target[j]->control_word = 128;
+                    }
+                }
+                // printf("  Target pos: %d, control: 0x%x", target[j]->target_position, target[j]->control_word);
+                // printf("\n");
+            }
+
+            // //check error
+            // if ((val->status_word & 0x0fff) != 0x0237)
+            // {
+            //    CHECKERROR(1);
+            // }
+
+            // if (reachedInitial == 0  && (val->status_word & 0x0fff) == 0x0237) {
+            //       reachedInitial = 1; // motor reached target
+            // }
+
+            // if (reachedInitial == 0  && (val->status_word & 0x0fff) == 0x0237) {
+            //       // // target->target_velocity = (int32)(100);
+            //       // target->target_position = (int32)(2620000);
+            // }
+
+            needlf = TRUE;
+        }
+        /* The cycle times in CSP mode with 2^n * 125 µs (for n =1 to 8) are:
+           250 µs, 500 µs, 1 ms, 2 ms, 4 ms, 8 ms, 16 ms or 32 ms.
+           in reality, the motor only accept < 1600 us
+        */
+        osal_usleep(1000); // 1ms
+    }
+    void _run()
+    {
 
         // target = (struct TorqueOut*)(ec_slave[1].outputs);
         // val = (struct TorqueIn*)(ec_slave[1].inputs);
@@ -361,7 +522,7 @@ public:
                     WRITE(i + 1, 0x6060, 0, buf8, control_mode_int8, "OpMode");
                     READ(i + 1, 0x6061, 0, buf8, "OpMode display");
                     WRITE(i + 1, 0x6080, 0, buf32, max_velocity_uint[i], "*Max motor speed*");
-                    WRITE(i + 1, 0x6072, 0, buf16, (uint16)(max_torque*torque_multiplier[i]), "*Maximal torque*"); // per thousand of rated torque
+                    WRITE(i + 1, 0x6072, 0, buf16, (uint16)(max_torque * torque_multiplier[i]), "*Maximal torque*"); // per thousand of rated torque
 
                     // READ(i + 1, 0x1604, 0, buf32, "rxPDO:0 1604");
                     // READ(i + 1, 0x1a07, 0, buf32, "txPDO:0 0x1a07");
@@ -460,99 +621,21 @@ public:
 
                     // int reachedInitial = 0; //TODO CHAGE TO ARRAY FOR EACH MOTOR, THIS IS NOT USED
 
-                    /* cyclic loop for slaves*/
+                    // auto start = std::chrono::high_resolution_clock::now(); // timming code
 
-                    for (size_t i = 0; i < NUM_TARGET; i++)
-                        {
-                            // SET INITAL GOAL
-                        target[i]->control_word = 0; // stop
-                        target[i]->max_torque = (uint16)(max_torque*torque_multiplier[i]);
-                        if (control_mode_int8 == CONTROL_MODE::CYCLIC_SYNC_POSITION) // csp
-                        {
-                            // READ(1, 0x6080, 0, buf32, "*max velocity*");
-                            // WRITE(1, 0x6080, 0, buf32, 100000, "*max velocity*"); usleep(100000);
-                            target[i]->target_position = target_int32[i];
-                        }
-                        else if (control_mode_int8 == CONTROL_MODE::CYCLIC_SYNC_VELOCITY) // csv
-                        {
-                            target[i]->target_velocity = target_int32[i];
-                            // target[i]->velocity_offset = 10000;//example of adding velocity offset
-                        }
-                        // else if (control_mode_int8 == CONTROL_MODE::CYCLIC_SYNC_TORQUE) // csv
-                            // {
-                            //    target[i]->torque_offset = 30;
-                            // }
-                        }
-
-                    // target->target_velocity = (int32)(100000);
-                    // target->target_position = (int32)(2620039);
-                    for (i = 1; i <= 50000; i++) // TODO CHANGE
+                    // for (i = 1; i <= 10000; i++) // TODO CHANGE
+                    while (!should_terminate)
                     {
-                        ec_send_processdata();
-                        wkc = ec_receive_processdata(EC_TIMEOUTRET);
-                        //  printf("Processdata cycle %4d, WKC %d,EWKC %d", i, wkc,expectedWKC);
-                        if (wkc >= expectedWKC)
-                        {
-
-                            for (int j = 0; j < NUM_TARGET; j++)
-                            {
-                                printf("cycle %4d, WKC %d, motor %d ", i, wkc, j);
-                                printf("pos: %8.6f, pos err: %f, vel: %f, torque: %f , status_word: %x, op_mode: %x \n",
-                                       (double)(val[j]->position_actual) / gear_ratio[j] * (2 * M_PI) / 131072,
-                                       (double)(val[j]->position_follow_err) / gear_ratio[j] * (2 * M_PI) / 131072,
-                                       (double)(val[j]->velocity_actual) / gear_ratio[j] * (2 * M_PI) / 131072,
-                                       (double)val[j]->torque_actual * 27720. / 1000000. * 2.,
-                                       val[j]->status_word,
-                                       val[j]->mode_of_operation_disp);
-
-                                switch (target[j]->control_word)
-                                {
-                                case 0:
-                                    target[j]->control_word = 6;
-                                    break;
-                                case 6:
-                                    target[j]->control_word = 7;
-                                    break;
-                                case 7:
-                                    target[j]->control_word = 15;
-                                    break;
-                                case 128:
-                                    target[j]->control_word = 0;
-                                    break;
-                                default:
-                                    if (val[j]->status_word >> 3 & 0x01)
-                                    {
-                                        READ(1, 0x1001, 0, buf8, "Error");
-                                        target[j]->control_word = 128;
-                                    }
-                                }
-                                // printf("  Target pos: %d, control: 0x%x", target[j]->target_position, target[j]->control_word);
-                                // printf("\n");
-                            }
-
-                            // //check error
-                            // if ((val->status_word & 0x0fff) != 0x0237)
-                            // {
-                            //    CHECKERROR(1);
-                            // }
-
-                            // if (reachedInitial == 0  && (val->status_word & 0x0fff) == 0x0237) {
-                            //       reachedInitial = 1; // motor reached target
-                            // }
-
-                            // if (reachedInitial == 0  && (val->status_word & 0x0fff) == 0x0237) {
-                            //       // // target->target_velocity = (int32)(100);
-                            //       // target->target_position = (int32)(2620000);
-                            // }
-
-                            needlf = TRUE;
-                        }
-                        /* The cycle times in CSP mode with 2^n * 125 µs (for n =1 to 8) are:
-                           250 µs, 500 µs, 1 ms, 2 ms, 4 ms, 8 ms, 16 ms or 32 ms.
-                           in reality, the motor only accept < 1600 us
-                        */
-                        osal_usleep(1000); // 1ms
+                        _run_loop();
                     }
+
+                    // // // timming code: Get the end time
+                    // auto end = std::chrono::high_resolution_clock::now();
+                    // // Calculate the elapsed time
+                    // auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+                    // // Print the elapsed time
+                    // std::cout << "Elapsed time: " << elapsed.count() << " milliseconds" << std::endl;
+
                     inOP = FALSE;
                 }
                 else
@@ -592,7 +675,7 @@ public:
         int slave;
         (void)ptr; /* Not used */
 
-        while (1)
+        while (!should_terminate)
         {
             if (inOP && ((wkc < expectedWKC) || ec_group[currentgroup].docheckstate))
             {

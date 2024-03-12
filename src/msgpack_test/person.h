@@ -5,7 +5,8 @@
 #include <vector>
 #include <msgpack.hpp>
 
-class Person {
+class Person
+{
 public:
     std::string name;
     int age;

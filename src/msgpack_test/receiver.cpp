@@ -29,6 +29,7 @@ int main() {
         return 1;
     }
 
+    while(1){
     // Receive data
     char buffer[1024]; 
     int bytes_received = recvfrom(sockfd, buffer, sizeof(buffer), 0, NULL, NULL);
@@ -52,7 +53,7 @@ int main() {
         std::cout << hobby << " ";
     }
     std::cout << std::endl;
-
+    }
     close(sockfd);
     return 0;
 }
