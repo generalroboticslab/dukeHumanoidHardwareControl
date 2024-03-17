@@ -20,7 +20,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <vector>
-
+#include <atomic>
 #include <pthread.h>
 #include <thread> // TODO
 
@@ -60,7 +60,7 @@ enum CONTROL_MODE : int8
 };
 
 // 0x1607 RPDO8
-struct out_ELMOt             // pdo
+struct tx_pdo_t              // tx pdo
 {                            // 1c12
     int32 target_position;   // 0x607a
     int32 target_velocity;   // 0x60ff
@@ -72,7 +72,7 @@ struct out_ELMOt             // pdo
     uint8 mode_of_operation; // 0x6060
 };
 // 0x1A07; // "TPDO8 Mapping"
-struct in_ELMOt                   // pdo
+struct rx_pdo_t                   // rx pdo
 {                                 // 1c13
     int32 position_actual;        // 0x6064
     int32 position_follow_err;    // 0x60f4
@@ -184,7 +184,10 @@ class Motor
 public:
     std::array<int32_t, NUM_TARGET> target_int32{};
 
-    std::array<int32_t, NUM_TARGET> target_offset{};
+    std::array<int32_t, NUM_TARGET> target_pos{};        // target position [rad]
+    std::array<int32_t, NUM_TARGET> target_pos_offset{}; // target position offset [rad]
+    std::array<int32_t, NUM_TARGET> target_vel{};        // target velocity [rad/s]
+    std::array<int32_t, NUM_TARGET> target_torque{};        // target toruqe
 
     uint32_t max_velocity_uint[NUM_TARGET];
     double target_input_rotor[NUM_TARGET]; // scaled by the gear ratio
@@ -193,8 +196,8 @@ public:
     int8_t control_mode_int8;
     double max_velocity = 0;
     double max_torque = 0;
-    struct out_ELMOt *target[NUM_TARGET];
-    struct in_ELMOt *val[NUM_TARGET];
+    struct tx_pdo_t *target[NUM_TARGET];
+    struct rx_pdo_t *val[NUM_TARGET];
 
     bool should_print = true;
 
@@ -205,30 +208,18 @@ public:
     std::thread thread2;
     std::atomic<bool> should_terminate{false};
 
-    // Motor()
-    // {
-    //    ifname = "enp3s0";
-    //    control_mode_int8 = CONTROL_MODE::CYCLIC_SYNC_VELOCITY;
-    //    max_velocity = 0.5;
-    //    double target_input_in[] = {0.5, 0.5};
+#ifdef UDP
+    // // asioUdpServer udp_server = asioUdpServer("127.0.0.1", 9871, "10.197.197.153", 9870);//defualt
+    // asioUdpServer udp_server = asioUdpServer("127.0.0.1", 9803, "127.0.0.1", 9870); // defualt
 
-    //    for (int i = 0; i < NUM_TARGET; i++)
-    //    {
-    //       target_input_rotor[i] = target_input_in[i] * gear_ratio[i];
-    //       max_velocity_uint[i] = (uint32_t)(max_velocity * gear_ratio[i] / 0.10472); // 1 RPM = 0.10472 rad/s
-    //       // printf("%d %d \n ", i, max_velocity_uint[i]);
-    //    }
-    //    printf("reached 1\n");
+    // bool UDP_INIT = true;         // bool to inform the udp thread to initialize
+    // bool SHOULD_SEND_UDP = false; // update and send udp
 
-    //    // osal_thread_create(&thread1, 128000, (void *)(&ecatcheck), NULL);
-    // }
-    
-    Motor(const std::string ifname_, int8_t control_mode_int8_, std::vector<double> target_input_in, double max_velocity_, double max_torque_)
+#endif // UDP
 
     Motor()
     {
         std::string ifname = "enp3s0";
-        // std::vector<double> target_input_in{0, 0, 0, 0, 0, 0};
         double max_velocity = 0.5;
         double max_torque = 20;
         double control_mode_int8 = CONTROL_MODE::CYCLIC_SYNC_VELOCITY;
@@ -253,25 +244,69 @@ public:
         }
     }
 
-    void set_target_input(std::vector<double> target_input_in)
+    void set_target_pos(const double *target_pos)
     {
-        if ((control_mode_int8 == CONTROL_MODE::CYCLIC_SYNC_POSITION) || control_mode_int8 == CONTROL_MODE::CYCLIC_SYNC_VELOCITY)
+        for (int i = 0; i < NUM_TARGET; i++)
         {
+            this->target_pos[i] = target_pos[i];
+            target_input_rotor[i] = (target_pos[i] + target_pos_offset[i]) * gear_ratio[i]; // rad
             // the range of encoder is 0~2^17-1,unit is cnt (count)
             // the target position's unit is rad
             // convert the target position from rad to cnt
-            for (int i = 0; i < NUM_TARGET; i++)
-            {
-                target_input_rotor[i] = (target_input_in[i] + target_offset[i]) * gear_ratio[i]; // rad
-                target_int32[i] = (int32_t)(target_input_rotor[i] * 131072 / (2 * M_PI));
-            }
+            target_int32[i] = (int32_t)(target_input_rotor[i] * 131072 / (2 * M_PI));
+        }
+    }
+    void set_target_pos_offset(std::vector<double> target_pos_offset)
+    {
+        for (int i = 0; i < NUM_TARGET; i++)
+        {   
+            this->target_pos_offset[i] = target_pos_offset[i];
+            target_input_rotor[i] = (target_pos[i] + target_pos_offset[i]) * gear_ratio[i]; // rad
+            target_int32[i] = (int32_t)(target_input_rotor[i] * 131072 / (2 * M_PI));
+        }
+    }
+
+    void set_target_vel(const double *target_vel)
+    {
+        for (int i = 0; i < NUM_TARGET; i++)
+        {   
+            this->target_vel[i] = target_vel[i];
+            target_input_rotor[i] = target_vel[i] * gear_ratio[i]; // rad/s
+            // the range of encoder is 0~2^17-1,unit is cnt (count)
+            // the target position's unit is rad
+            // convert the target position from rad to cnt
+            target_int32[i] = (int32_t)(target_input_rotor[i] * 131072 / (2 * M_PI));
+        }
+    }
+
+    void set_target_torque(const double *target_torque)
+    {
+        for (int i = 0; i < NUM_TARGET; i++)
+        {   
+            this->target_input_rotor[i] = target_torque[i];
+            this->target_torque[i] = target_torque[i];
+            target_int32[i] = (int32_t)(target_torque[i]); // NO offset applied
+        }
+    }
+
+    void set_target_input(const std::vector<double> &target_input_in)
+    {
+        // Check the size
+        if (target_input_in.size() != NUM_TARGET)
+        {
+            throw std::runtime_error("Input must be exactly " + std::to_string(NUM_TARGET) + "size");
+        }
+        if ((control_mode_int8 == CONTROL_MODE::CYCLIC_SYNC_POSITION))
+        {
+            set_target_pos(target_input_in.data());
+        }
+        else if (control_mode_int8 == CONTROL_MODE::CYCLIC_SYNC_VELOCITY)
+        {
+            set_target_vel(target_input_in.data());
         }
         else if (control_mode_int8 == CONTROL_MODE::CYCLIC_SYNC_TORQUE)
         {
-            for (int i = 0; i < NUM_TARGET; i++)
-            {
-                target_int32[i] = (int32_t)(target_input_rotor[i]); // NO offset applied
-            }
+            set_target_torque(target_input_in.data());
         }
     }
 
@@ -294,15 +329,6 @@ public:
     {
         should_terminate = value;
         std::cout << "set_should_terminate()" << std::endl;
-    }
-
-    void set_target_offset(std::vector<double> target_offset)
-    {
-        for (int i = 0; i < NUM_TARGET; i++)
-        {
-            // target_input_rotor[i] += target_offset[i] * gear_ratio[i]; // rad
-            this->target_offset[i] = target_offset[i];
-        }
     }
 
     void run()
@@ -541,8 +567,8 @@ public:
 
                 for (size_t i = 0; i < NUM_TARGET; i++)
                 {
-                    target[i] = (struct out_ELMOt *)(ec_slave[1 + i].outputs);
-                    val[i] = (struct in_ELMOt *)(ec_slave[1 + i].inputs);
+                    target[i] = (struct tx_pdo_t *)(ec_slave[1 + i].outputs);
+                    val[i] = (struct rx_pdo_t *)(ec_slave[1 + i].inputs);
                 }
 
                 oloop = ec_slave[0].Obytes;
