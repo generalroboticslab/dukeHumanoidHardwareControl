@@ -8,13 +8,28 @@
 #include <iostream>
 #include <atomic>
 
+#include <pybind11/eigen.h>
+#include <Eigen/Dense>
+
 namespace py = pybind11;
+
+#define NUM_TARGET 6 // num of motors
+
+using MatrixXdR = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+
+template <typename T>
+using Vec12 = Eigen::Matrix<T, 12, 1>;
 
 class BackgroundWorker
 {
 public:
+
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    Eigen::VectorXd eigen_vec = Eigen::VectorXd::Zero(NUM_TARGET);  // Declare and initialize in one line
+    // Vec12<double> eigen_vec;
+
     std::chrono::system_clock::time_point t;
-    std::vector<int> data_vector{1, 2, 3};
+    std::vector<double> data_vector{1, 2, 3};
 
     BackgroundWorker() = default; // Default constructor
     BackgroundWorker(const std::string &ifname_, int8_t control_mode_int8, double max_velocity, double max_torque)
@@ -38,7 +53,7 @@ public:
         should_terminate = value;
         std::cout << "set_should_terminate()" << std::endl;
     }
-    void change_data_vector(const py::array_t<int> &a)
+    void change_data_vector(const py::array_t<double> &a)
     {
         for (int i = 0; i < 3; i++)
         {
@@ -53,6 +68,7 @@ private:
         {
             std::this_thread::sleep_for(std::chrono::seconds(1));
             t = std::chrono::system_clock::now();
+            eigen_vec(i%NUM_TARGET)=static_cast<double>(std::chrono::system_clock::to_time_t(t));
             data_vector[2] = i;
             std::cout << "Background thread running: " << i << std::endl;
         }
@@ -72,7 +88,8 @@ PYBIND11_MODULE(pybind_test, m)
         .def_readwrite("data_vector", &BackgroundWorker::data_vector)
         .def("change_data_vector", &BackgroundWorker::change_data_vector)
         .def("start_background_thread", &BackgroundWorker::start_background_thread)
-        .def("set_should_terminate", &BackgroundWorker::set_should_terminate);
+        .def("set_should_terminate", &BackgroundWorker::set_should_terminate)
+        .def_readwrite("eigen_vec", &BackgroundWorker::eigen_vec, py::return_value_policy::reference);
 }
 
 // #include <pybind11/pybind11.h>

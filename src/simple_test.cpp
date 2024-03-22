@@ -22,29 +22,36 @@
 #include <iostream>
 #include <sstream>
 
-#include "ethercat.h"
+#include <Eigen/Dense>
+
 #include "ethercat_motor.h"
 
-std::vector<double> parse_doubles(const char *input)
+Eigen::VectorXd parse_doubles(const char *input)
 {
-   std::stringstream ss(input);
-   std::vector<double> result;
-   result.reserve(NUM_TARGET); // Pre-allocate space if NUM_TARGET is known
+    std::stringstream ss(input);
+    // Initialize an empty Eigen vector
+    Eigen::VectorXd result;  
 
-   std::string substr;
-   while (std::getline(ss, substr, ','))
-   {
-      std::istringstream iss(substr);
-      double value;
-      if (!(iss >> value))
-      {
-         throw std::runtime_error("Invalid number format in input string");
-      }
-      result.push_back(value);
-   }
+    // Pre-allocate if NUM_TARGET is known (slightly different approach)
+    if (NUM_TARGET > 0) {
+       result.resize(NUM_TARGET);
+    }
 
-   return result;
+    std::string substr;
+    int index = 0;
+    while (std::getline(ss, substr, ',')) 
+    {
+        std::istringstream iss(substr);
+        double value;
+        if (!(iss >> value)) {
+            throw std::runtime_error("Invalid number format in input string");
+        }
+        result(index++) = value; 
+    }
+
+    return result;
 }
+
 
 int main(int argc, char *argv[])
 {
@@ -84,7 +91,7 @@ int main(int argc, char *argv[])
    else
    {
       std::string modeStr = argv[2];
-      std::vector<double> target_input_in = parse_doubles(argv[3]);
+      Eigen::VectorXd target_input = parse_doubles(argv[3]);
 
       double target = atof(argv[3]);
       double max_velocity = atof(argv[4]);
@@ -105,7 +112,7 @@ int main(int argc, char *argv[])
       else if (modeStr == "cst")
       {
          control_mode = CONTROL_MODE::CYCLIC_SYNC_TORQUE;
-         double target_torque = atof(argv[3]);
+         double target_torque_raw = atof(argv[3]);
          printf("Control mode: cst\n");
          printf("Target torque: [%%rated torue]");
       }
@@ -115,7 +122,7 @@ int main(int argc, char *argv[])
          return (0);
       }
 
-      for (double value : target_input_in)
+      for (double value : target_input)
       {
          printf("%.3f ", value);
       }
@@ -123,13 +130,15 @@ int main(int argc, char *argv[])
       // return (0);
 
       Motor motor(argv[1], control_mode, max_velocity,max_torque);
-      motor.set_target_input(target_input_in);
+      motor.set_target_input(target_input);
       
       if (argc == 7){
-         motor.set_target_offset(parse_doubles(argv[6]));
+
+         Eigen::VectorXd target_pos_offset = parse_doubles(argv[6]);
+         motor.set_target_position_offset(target_pos_offset);
       }
       
-      motor.run();
+            motor.run();
 
       printf("End program\n");
       return (0);

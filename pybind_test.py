@@ -25,8 +25,10 @@ worker.start_background_thread(10)
 # Do other things in Python, but give the background thread time to check the flag
 for _ in range(10):
     print(f"Doing other Python tasks:t={worker.t}")
-    time.sleep(1)
     print(worker.data_vector)  # Output: [50, 20]
+    print(worker.eigen_vec)
+    time.sleep(1)
+
 
 
 print("End of Python program") 

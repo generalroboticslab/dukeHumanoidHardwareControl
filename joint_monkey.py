@@ -14,6 +14,9 @@ Joint Monkey
 - Demonstrates line drawing utilities to visualize DOF frames (origin and axis).
 """
 
+# conda activate py38
+# export LD_LIBRARY_PATH=${CONDA_PREFIX}/lib
+
 # import os
 # os.environ["LD_LIBRARY_PATH"] = "/home/grl/repo/micromamba/envs/py38/lib"
 
@@ -25,8 +28,8 @@ from isaacgym import gymapi, gymutil
 from scipy.spatial.transform import Rotation 
 
 
-ENABLE_MOTOR=True
-# ENABLE_MOTOR=False
+# ENABLE_MOTOR=True
+ENABLE_MOTOR=False
 
 
 if ENABLE_MOTOR:
@@ -35,7 +38,7 @@ if ENABLE_MOTOR:
 
     interface_name = "enp3s0"
     control_mode_int8 = 8
-    max_velocity = 2
+    max_velocity = 3
     max_torque= 240
     motor=ethercat_motor_py.PyMotor("enp3s0",control_mode_int8, max_velocity, max_torque)
     motor.should_print = 0
@@ -50,8 +53,8 @@ if ENABLE_MOTOR:
 
 
 
-# ENABLE_IMU = False
-ENABLE_IMU = True
+ENABLE_IMU = False
+# ENABLE_IMU = True
 if ENABLE_IMU:
     import mscl
     
@@ -151,7 +154,7 @@ args = gymutil.parse_arguments(
     description="Joint monkey: Animate degree-of-freedom ranges",
     custom_parameters=[
         {"name": "--asset_id", "type": int, "default": 0, "help": "Asset id (0 - %d)" % (len(asset_descriptors) - 1)},
-        {"name": "--speed_scale", "type": float, "default": 0.2, "help": "Animation speed scale"},
+        {"name": "--speed_scale", "type": float, "default": 0.1, "help": "Animation speed scale"},
         {"name": "--show_axis", "action": "store_true", "help": "Visualize DOF axis"}])
 
 if args.asset_id < 0 or args.asset_id >= len(asset_descriptors):

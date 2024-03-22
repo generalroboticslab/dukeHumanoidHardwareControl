@@ -10,10 +10,17 @@ sudo ./simple_test ifname control_mode target max_velocity
 - max_velocity: the maximum velocity of motor.unit is rad/s, a comma separated string
 
 
-example
+example (e.g enp3s0 is the interface_name)
 ```
-//sudo ./simple_test enp3s0 csv 0.1,0.2,0.4,0.8,0.1,0.2 1
-// sudo ./simple_test enp3s0 csp 0,0,0,0,0,0 1
+//sudo ./simple_test enp3s0 csv 0,0,0,0,0,0 1 40
+// sudo ./simple_test enp3s0 csp 0,0,0,0,0,0 1 40
+
+sudo ./SOEM/test/linux/slaveinfo/slaveinfo enp3s0 -sdo
+
+
+// restart interface
+sudo ip link set enp3s0 down
+sudo ip link set enp3s0 up
 ```
 
 

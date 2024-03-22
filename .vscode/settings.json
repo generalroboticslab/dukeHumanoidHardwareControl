@@ -74,7 +74,8 @@
         "source_location": "cpp",
         "future": "cpp",
         "span": "cpp",
-        "valarray": "cpp"
+        "valarray": "cpp",
+        "dense": "cpp"
     },
     // https://github.com/microsoft/vscode-cmake-tools/blob/main/docs/cmake-settings.md
     "cmake.generator":"Ninja",

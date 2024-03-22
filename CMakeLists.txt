@@ -27,8 +27,14 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/__init__.py") # Creates an empty file
 
 find_package(msgpack-cxx CONFIG REQUIRED)
 # target_link_libraries(main PRIVATE msgpack-cxx)
+
 find_package(asio CONFIG REQUIRED)
 # target_link_libraries(main PRIVATE asio::asio)
+
+find_package(Eigen3 CONFIG REQUIRED)
+# target_link_libraries(main PRIVATE Eigen3::Eigen)
+# target_include_directories(main PRIVATE ${EIGEN3_INCLUDE_DIR})
+
 
 find_package(pybind11 REQUIRED)
 find_package(Threads REQUIRED)
@@ -36,38 +42,46 @@ find_package(Threads REQUIRED)
 # Include SOEM source files into your build 
 add_subdirectory(SOEM)  
 
+add_subdirectory(SOEM/test/linux/slaveinfo) # build slaveinfo
+
 # Create your executable
 add_executable(simple_test 
             src/simple_test.cpp
             src/ethercat_motor.h
-            src/network.cpp
-            src/network.h
+            # src/ethercat_motor.cpp
+            # src/network.cpp
+            # src/network.h
             )
-# Link your executable against the SOEM library
-target_link_libraries(simple_test PUBLIC soem)  # 'soem' is the target created by add_subdirectory
-target_link_libraries(simple_test PUBLIC msgpack-cxx) 
-target_link_libraries(simple_test PUBLIC asio::asio)
-target_include_directories(simple_test PUBLIC SOEM)
-# target_link_libraries(simple_test PUBLIC pybind11::module)
-# target_include_directories(simple_test PUBLIC ${pybind11_INCLUDE_DIRS})
+# target_link_libraries(simple_test PRIVATE msgpack-cxx) 
+target_link_libraries(simple_test PRIVATE soem)  # 'soem' is the target created by add_subdirectory
+target_include_directories(simple_test PRIVATE SOEM)
+
+# target_link_libraries(simple_test PRIVATE asio::asio)
+# target_link_libraries(simple_test PRIVATE pybind11::module)
+# target_include_directories(simple_test PRIVATE ${pybind11_INCLUDE_DIRS})
+target_link_libraries(simple_test PRIVATE Eigen3::Eigen)
+target_include_directories(simple_test PRIVATE ${EIGEN3_INCLUDE_DIR})
 
 
 pybind11_add_module(ethercat_motor_py 
     src/ethercat_motor_py.cpp
     src/ethercat_motor.h
+    # src/ethercat_motor.cpp
 )
-target_link_libraries(ethercat_motor_py PUBLIC msgpack-cxx) 
-
+# target_link_libraries(ethercat_motor_py PRIVATE msgpack-cxx) 
 target_link_libraries(ethercat_motor_py PRIVATE soem) 
 target_include_directories(ethercat_motor_py PRIVATE SOEM)
-target_link_libraries(ethercat_motor_py PUBLIC pybind11::module)
-target_include_directories(ethercat_motor_py PUBLIC ${pybind11_INCLUDE_DIRS})
-
+target_link_libraries(ethercat_motor_py PRIVATE pybind11::module)
+target_include_directories(ethercat_motor_py PRIVATE ${pybind11_INCLUDE_DIRS})
+target_link_libraries(ethercat_motor_py PRIVATE Eigen3::Eigen)
+target_include_directories(ethercat_motor_py PRIVATE ${EIGEN3_INCLUDE_DIR})
 
 pybind11_add_module(pybind_test src/pybind_test.cpp)
 # add_executable(pybind_test src/pybind_test.cpp)
-target_link_libraries(pybind_test PUBLIC pybind11::module)
-target_include_directories(pybind_test PUBLIC ${pybind11_INCLUDE_DIRS})
+target_link_libraries(pybind_test PRIVATE pybind11::module)
+target_include_directories(pybind_test PRIVATE ${pybind11_INCLUDE_DIRS})
+target_link_libraries(pybind_test PRIVATE Eigen3::Eigen)
+target_include_directories(pybind_test PRIVATE ${EIGEN3_INCLUDE_DIR})
 
 
 add_executable(msgpack_test src/msgpack_test/msgpack_test.cpp)
