@@ -39,11 +39,11 @@ using VectorNd = Eigen::Matrix<ScalarType, NumElements, 1>;
 
 #define EC_TIMEOUTMON 500
 
-#define NUM_TARGET 6 // num of motors
-// #define NUM_TARGET 1 // num of motors
+#define NUM_TARGET 10 // num of motors
 
-const VectorNd<double, 6> gear_ratio_all = {20, 20, 20, 20, 10, 10}; // hack max 6 motors
-const VectorNd<double, 6> torque_multiplier_all = {1, 1, 1, 1, 1, 1};
+const VectorNd<double, 10> gear_ratio_all = {18, 20, 18, 18, 10,10,18,18,20,18}; // hack max 6 motors
+const VectorNd<double, 10> torque_multiplier_all = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
+
 // 2020-20 motor current torue ratio: toruqe [NM] = 2.0 * current [A] (from measurement)
 // 2010-10 motor current torque ratio: toruqe [NM] = 1.6325 * current [A] (from figure)
 
@@ -119,8 +119,8 @@ int WRITE(int slaveId, int idx, int sub, T &buf, int value, const std::string &c
 
 void CHECKERROR(int slaveId)
 {
-    ec_readstate();
-    printf("EC> \"%s\" %x - %x [%s] \n", (char *)ec_elist2string(), ec_slave[slaveId].state, ec_slave[slaveId].ALstatuscode, (char *)ec_ALstatuscode2string(ec_slave[slaveId].ALstatuscode));
+    ecx_readstate(&ecx_context);
+    printf("EC> \"%s\" %x - %x [%s] \n", (char *)ecx_elist2string(&ecx_context), ec_slave[slaveId].state, ec_slave[slaveId].ALstatuscode, (char *)ec_ALstatuscode2string(ec_slave[slaveId].ALstatuscode));
 }
 
 int ELMOsetupGOLD(ecx_contextt *context, uint16 slave)
@@ -202,21 +202,29 @@ class Motor
 {
 public:
     bool debug = true;
-    bool should_print = false;
+    bool should_print = true;
 
-    VectorNd<int32, NUM_TARGET> target_int32 = VectorNd<int32, NUM_TARGET>::Zero();
     VectorNd<double, NUM_TARGET> target_position = VectorNd<double, NUM_TARGET>::Zero();        // target position [rad]
     VectorNd<double, NUM_TARGET> target_position_offset = VectorNd<double, NUM_TARGET>::Zero(); // target position offset [rad]
-    VectorNd<double, NUM_TARGET> target_velocity = VectorNd<double, NUM_TARGET>::Zero();        // target velocity [rad/s]
-    VectorNd<double, NUM_TARGET> target_torque_raw = VectorNd<double, NUM_TARGET>::Zero();      // target toruqe (raw) as of 0.1% rated torque
+    VectorNd<int32, NUM_TARGET> target_position_int32 = VectorNd<int32, NUM_TARGET>::Zero();
+
+    VectorNd<double, NUM_TARGET> target_velocity = VectorNd<double, NUM_TARGET>::Zero(); // target velocity [rad/s]
+    VectorNd<double, NUM_TARGET> velocity_offset = VectorNd<double, NUM_TARGET>::Zero(); // feed-forward velocity offset [rad/s]
+    VectorNd<int32, NUM_TARGET> target_velocity_int32 = VectorNd<int32, NUM_TARGET>::Zero();
+    VectorNd<int32, NUM_TARGET> velocity_offset_int32 = VectorNd<int32, NUM_TARGET>::Zero(); // feed-forward velocity offset in the encoder space [cnt/s]
+
+    VectorNd<double, NUM_TARGET> target_torque_raw = VectorNd<double, NUM_TARGET>::Zero(); // target toruqe (raw) as of 0.1% rated torque
+    VectorNd<int16, NUM_TARGET> target_torque_int16 = VectorNd<int16, NUM_TARGET>::Zero(); // target torque as of 0.1% rated torque
+    VectorNd<int16, NUM_TARGET> torque_offset_int16 = VectorNd<int16, NUM_TARGET>::Zero(); // feed-forward torque offset as of 0.1% rated torque
+
     VectorNd<uint32, NUM_TARGET> max_velocity_uint = VectorNd<uint32, NUM_TARGET>::Zero();
 
     VectorNd<double, NUM_TARGET> actual_position = VectorNd<double, NUM_TARGET>::Zero();       // actual position [rad]
     VectorNd<double, NUM_TARGET> actual_position_error = VectorNd<double, NUM_TARGET>::Zero(); // actual position error [rad]
     VectorNd<double, NUM_TARGET> actual_velocity = VectorNd<double, NUM_TARGET>::Zero();       // actual velocity [rad/s]
-    VectorNd<double, NUM_TARGET> actual_torque_raw = VectorNd<double, NUM_TARGET>::Zero();     // actual torque (raw) as of 0.1% rated torque
 
-    VectorNd<double, NUM_TARGET> actual_torque = VectorNd<double, NUM_TARGET>::Zero(); // actual torque in [mA] actual_torque=actual_torque_raw*rated_torque*1e-3
+    VectorNd<double, NUM_TARGET> actual_torque_raw = VectorNd<double, NUM_TARGET>::Zero(); // actual torque (raw) as of 0.1% rated torque
+    VectorNd<double, NUM_TARGET> actual_torque = VectorNd<double, NUM_TARGET>::Zero();     // actual torque in [mA] actual_torque=actual_torque_raw*rated_torque*1e-3
 
     VectorNd<double, NUM_TARGET> rated_torque = VectorNd<double, NUM_TARGET>::Zero(); // actual velocity (raw) in rated current [mA]
 
@@ -226,11 +234,15 @@ public:
     VectorNd<double, NUM_TARGET> gear_ratio = gear_ratio_all.head(NUM_TARGET);
     VectorNd<double, NUM_TARGET> torque_multiplier = torque_multiplier_all.head(NUM_TARGET);
 
+    VectorNd<double, NUM_TARGET> max_torque = VectorNd<double, NUM_TARGET>::Zero();
+
     std::string ifname; // use ifconfig in commandline to find the ethernet name
 
     int8_t control_mode_int8;
     double max_velocity = 0;
-    double max_torque = 0;
+
+
+    // double max_torque = 0;
     struct tx_pdo_t *target[NUM_TARGET];
     struct rx_pdo_t *val[NUM_TARGET];
 
@@ -241,6 +253,8 @@ public:
     std::thread thread2;
 
     std::atomic<bool> should_terminate{false};
+
+    bool init_successful = false;
 
     Motor()
     {
@@ -258,19 +272,22 @@ public:
 
     void _init(const std::string &ifname_, int8_t control_mode_int8_, double max_velocity_, double max_torque_)
     {
-        // std::cout << target_int32 << std::endl; // Prints in column format
-        // exit(0);
 
         ifname = ifname_;
         control_mode_int8 = control_mode_int8_;
         max_velocity = max_velocity_;
-        max_torque = max_torque_;
-
         for (int i = 0; i < NUM_TARGET; i++)
         {
+            max_torque(i) = max_torque_;
             max_velocity_uint(i) = (uint32_t)(max_velocity * gear_ratio(i) / 0.10472); // 1 RPM = 0.10472 rad/s
         }
         print_eigen_vec(max_velocity_uint, "%u ", "max_velocity_uint: ");
+        configure();
+    }
+
+    void set_max_torque(const Eigen::Ref<Eigen::VectorXd> _max_torque)
+    {
+        max_torque = _max_torque;
     }
 
     void set_target_position(const Eigen::Ref<Eigen::VectorXd> _target_position)
@@ -280,13 +297,13 @@ public:
         // the target position's unit is rad
         // convert the target position from rad to cnt
         // scaled by the gear ratio
-        target_int32 = (gear_ratio.cwiseProduct(target_position + target_position_offset) * 131072 / (2 * M_PI)).cast<int32_t>();
+        target_position_int32 = (gear_ratio.cwiseProduct(target_position + target_position_offset) * 131072 / (2 * M_PI)).cast<int32_t>();
     }
 
     void set_target_position_offset(const Eigen::Ref<Eigen::VectorXd> _target_position_offset)
     {
         target_position_offset = _target_position_offset;
-        target_int32 = (gear_ratio.cwiseProduct(target_position + target_position_offset) * 131072 / (2 * M_PI)).cast<int32_t>();
+        target_position_int32 = (gear_ratio.cwiseProduct(target_position + target_position_offset) * 131072 / (2 * M_PI)).cast<int32_t>();
     }
 
     void set_target_velocity(const Eigen::Ref<Eigen::VectorXd> _target_velocity)
@@ -296,14 +313,27 @@ public:
         // the target velocity's unit is rad/s
         // convert the target velocity from rad to cnt/s
         // scaled by the gear ratio
-        target_int32 = (gear_ratio.cwiseProduct(target_velocity) * 131072 / (2 * M_PI)).cast<int32_t>();
-        print_eigen_vec(target_int32, "%d ", "(set_target_velocity()) target_int32: ");
+        target_velocity_int32 = (gear_ratio.cwiseProduct(target_velocity) * 131072 / (2 * M_PI)).cast<int32_t>();
+        // print_eigen_vec(target_velocity_int32, "%d ", "(set_target_velocity()) target_velocity_int32: ");
+    }
+
+    void set_velocity_offset(const Eigen::Ref<Eigen::VectorXd> _velocity_offset)
+    {
+        velocity_offset = _velocity_offset;
+        velocity_offset_int32 = (gear_ratio.cwiseProduct(velocity_offset) * 131072 / (2 * M_PI)).cast<int32_t>();
+        std::cout << "Velocity offset: " << velocity_offset.transpose() << ", Gear ratio: " << gear_ratio.transpose() << ", PI value: " << M_PI << std::endl;
+
     }
 
     void set_target_torque(const Eigen::Ref<Eigen::VectorXd> _target_torque)
     {
         target_torque_raw = _target_torque;
-        target_int32 = target_torque_raw.cast<int32_t>(); // NO offset applied
+        target_torque_int16 = target_torque_raw.cast<int16>(); // NO offset applied //TODO CHANGE TO INT16
+    }
+
+    void set_torque_offset(const Eigen::Ref<Eigen::VectorXd> _torque_offset)
+    {
+        torque_offset_int16 = _torque_offset.cast<int16>(); // NO offset applied
     }
 
     void set_target_input(const Eigen::Ref<Eigen::VectorXd> target_input)
@@ -359,281 +389,242 @@ public:
         _run();
     }
 
-    void _run()
+    // configure motor
+    int configure()
     {
-        uint32 buf32;
-        uint16 buf16;
-        uint8 buf8;
-        int8 sbuf8;
-        int32 sbuf32;
-        printf("Starting ethercat motor\n");
 
+        printf("Starting ethercat motor\n");
         /* initialise SOEM, bind socket to ifname */
         if (ec_init(ifname.c_str()) <= 0)
         {
             printf("\033[31;1mNo socket connection on %s! Execute as root (use 'sudo')\033[0m\n", ifname.c_str());
+            return -1;
         }
-        else // ec_init successful
+        // ec_init successful
+        printf("ec_init on %s succeeded.\n", ifname.c_str());
+
+        /* find and auto-config slaves */
+        for (int i = 0; i < NUM_TARGET; i++)
         {
-            printf("ec_init on %s succeeded.\n", ifname.c_str());
-            /* find and auto-config slaves */
-            for (int i = 0; i < NUM_TARGET; i++)
+            ec_slave[1 + i].PO2SOconfigx = &ELMOsetupGOLD;
+        }
+        if (ecx_config_init(&ecx_context, false) <= 0)
+        {
+            printf("\033[31;1mNo slaves found!\n"
+                   "check if the slave is powered on or try resetting the adaptor:\n"
+                   "sudo ip link set %s down\nsudo ip link set %s up\n\033[0m\n",
+                   ifname.c_str(), ifname.c_str());
+            return -1;
+        }
+
+        // ecx_config_init successful
+        printf("ecx_config_init succeeded.\n");
+
+        ecx_configdc(&ecx_context);
+        // osal_usleep(100000);
+        // osal_usleep(10000);
+        for (int i = 1; i <= ec_slavecount; i++)
+        {
+            int wkc = ELMOsetupGOLD(&ecx_context, i);
+            int expected_wkc=25;
+            if (wkc != expected_wkc)
             {
-                ec_slave[1 + i].PO2SOconfigx = &ELMOsetupGOLD;
-            }
-            if (ecx_config_init(&ecx_context, false) <= 0)
+                printf("error: ELMOsetupGOLD\n expected_wkc=%d, actual wkc=%d",expected_wkc,wkc); // TODO add expeted wkc
+                        // exit(1);
+            };
+        }
+
+        // ELMOsetupGOLD successful
+        printf("%d slaves found and configured.\n", ec_slavecount);
+
+        if (forceByteAlignment)
+        {
+            ecx_config_map_group(&ecx_context, &IOmap, 0);
+            // ec_config_map_aligned(&IOmap);
+        }
+        else
+        {
+            ecx_config_map_group_aligned(&ecx_context, &IOmap, 0);
+            // ec_config_map(&IOmap);
+        }
+
+        /* wait for all slaves to reach SAFE_OP state */
+        ec_statecheck(0, EC_STATE_PRE_OP, EC_TIMEOUTSTATE * 4);
+
+        // show slave info
+        for (int i = 1; i <= ec_slavecount; i++)
+        {
+            printf("\nSlave:%d\n Name:%s\n Output size: %dbits\n Input size: %dbits\n State: %d\n Delay: %d[ns]\n Has DC: %d\n",
+                   i, ec_slave[i].name, ec_slave[i].Obits, ec_slave[i].Ibits,
+                   ec_slave[i].state, ec_slave[i].pdelay, ec_slave[i].hasdc);
+        }
+        printf("Slaves mapped, state to SAFE_OP.\n");
+
+        // /** disable heartbeat alarm */
+        // for (int i = 1; i <= ec_slavecount; i++) {
+        //     uint32 buf32;
+        //     uint8 buf8;
+        //     uint16 buf16;
+        //     READ<uint32>(i, 0x10F1, 2, buf32, "Heartbeat?");
+        //     WRITE<uint32>(i, 0x10F1, 2, buf32, 1, "Heartbeat");
+
+        //     WRITE<uint8>(i, 0x60c2, 1, buf8, 2, "Time period");
+        //     WRITE<uint16>(i, 0x2f75, 0, buf16, 2, "Interpolation timeout");
+        // }
+
+        for (int i = 0; i < ec_slavecount; i++)
+        {
+            // READ<uint32>(i + 1, 0x6075, 0, buf32, "Motor Rated Current [in mA]");
+
+            READ<uint32>(i + 1, 0x6076, 0, buf32, "Motor Rated torque [in mA]"); // same as the motor rated current
+            rated_torque(i) = buf32;
+
+            // READ<uint32>(i + 1, 0x1c12, 0, buf32, "rxPDO:0");
+            // READ<uint32>(i + 1, 0x1c12, 1, buf32, "rxPDO:1");
+
+            // READ<uint32>(i + 1, 0x1c13, 0, buf32, "txPDO:0");
+            // READ<uint32>(i + 1, 0x1c13, 1, buf32, "txPDO:1");
+
+            READ<int32>(i + 1, 0x6064, 0, sbuf32, "*position actual value*");
+            actual_position(i) = (double)(sbuf32) / gear_ratio(i) * (2 * M_PI) / 131072;
+
+            // WRITE<int8>(i + 1, 0x6060, 0, sbuf8, control_mode_int8, "OpMode");
+            // READ<int8>(i + 1, 0x6061, 0, sbuf8, "OpMode display");
+
+            WRITE<uint32>(i + 1, 0x6080, 0, buf32, max_velocity_uint(i), "*Max motor speed*");
+            // READ<uint32>(i + 1, 0x6080, 0, buf32, "*Max motor speed*");
+
+            WRITE<uint16>(i + 1, 0x6072, 0, buf16, (uint16)(max_torque(i) * torque_multiplier(i)), "*Maximal torque*"); // per thousand of rated torque
+            // READ<uint16>(i + 1, 0x6072, 0, buf16, "*Maximal torque*");                                               // per thousand of rated torque
+
+            //     READ<uint32>(i + 1, 0x6065, 0, buf32, "Position following error window");
+            //     READ<uint16>(i + 1, 0x6066, 0, buf16, "Position following error time out [ms]");
+            //     READ<uint32>(i + 1, 0x6066, 0, buf32, "Position window");
+            //     READ<uint32>(i + 1, 0x6067, 0, buf32, "Position window times [ms]");
+        }
+        /* wait for all slaves to reach SAFE_OP state */
+        ec_statecheck(0, EC_STATE_SAFE_OP, EC_TIMEOUTSTATE * 4);
+        printf("segments : %d : %d %d %d %d\n", ec_group[0].nsegments, ec_group[0].IOsegment[0], ec_group[0].IOsegment[1], ec_group[0].IOsegment[2], ec_group[0].IOsegment[3]);
+        expectedWKC = (ec_group[0].outputsWKC * 2) + ec_group[0].inputsWKC;
+        printf("Calculated expected workcounter %d\n", expectedWKC);
+
+        for (size_t i = 0; i < NUM_TARGET; i++)
+        {
+            target[i] = (struct tx_pdo_t *)(ec_slave[1 + i].outputs);
+            val[i] = (struct rx_pdo_t *)(ec_slave[1 + i].inputs);
+
+            //  * Drive state machine transistions
+            //  *   0 -> 6 -> 7 -> 15
+            target[i]->control_word = 0;
+            target[i]->mode_of_operation = control_mode_int8;
+
+            target[i]->target_position = 0;
+            target[i]->target_velocity = 0;
+            target[i]->velocity_offset = 0;
+            target[i]->target_torque = 0;
+            target[i]->torque_offset = 0;
+        }
+
+        // set init_successful to true
+        init_successful = true;
+        return 0;
+    }
+
+    void _run()
+    {
+        if (init_successful)
+        {
+            // printf("exit here !!!!\n"); //HACK
+            // exit(1);
+            printf("Request operational state for all slaves\n");
+            ec_slave[0].state = EC_STATE_OPERATIONAL;
+
+            /* send one valid process data to make outputs in slaves happy*/
+            ec_send_processdata();
+            ec_receive_processdata(EC_TIMEOUTRET);
+            /* request OP state for all slaves */
+            ec_writestate(0);
+            int chk = 200;
+            /* wait for all slaves to reach OP state */ // takes about 3 ms
+            do
             {
-                printf("\033[31;1mNo slaves found!\n"
-                       "check if the slave is powered on or try resetting the adaptor:\n"
-                       "sudo ip link set %s down\nsudo ip link set %s up\n\033[0m\n",
-                       ifname.c_str(), ifname.c_str());
-            }
-            else // ecx_config_init successful
-            {
-                ecx_configdc(&ecx_context);
-                // osal_usleep(100000);
-                // osal_usleep(10000);
-                for (int i = 1; i <= ec_slavecount; i++)
-                {
-                    int wkc = ELMOsetupGOLD(&ecx_context, i);
-                    if (wkc != 25)
-                    {
-                        printf("error: ELMOsetupGOLD \n");
-                        exit(1);
-                    };
-                }
-                printf("%d slaves found and configured.\n", ec_slavecount);
-
-                if (forceByteAlignment)
-                {
-                    ecx_config_map_group(&ecx_context, &IOmap, 0);
-                    // ec_config_map_aligned(&IOmap);
-                }
-                else
-                {
-                    ecx_config_map_group_aligned(&ecx_context, &IOmap, 0);
-                    // ec_config_map(&IOmap);
-                }
-
-                // // HACK
-                // for (size_t i = 0; i < NUM_TARGET; i++)
-                // {
-                //     target[i] = (struct tx_pdo_t *)(ec_slave[1 + i].outputs);
-                //     val[i] = (struct rx_pdo_t *)(ec_slave[1 + i].inputs);
-                // }
-
-                /* wait for all slaves to reach SAFE_OP state */
-                ec_statecheck(0, EC_STATE_PRE_OP, EC_TIMEOUTSTATE * 4);
-
-                // show slave info
-                for (int i = 1; i <= ec_slavecount; i++)
-                {
-                    printf("\nSlave:%d\n Name:%s\n Output size: %dbits\n Input size: %dbits\n State: %d\n Delay: %d[ns]\n Has DC: %d\n",
-                           i, ec_slave[i].name, ec_slave[i].Obits, ec_slave[i].Ibits,
-                           ec_slave[i].state, ec_slave[i].pdelay, ec_slave[i].hasdc);
-                }
-                printf("Slaves mapped, state to SAFE_OP.\n");
-
-                // /** disable heartbeat alarm */
-                // for (int i = 1; i <= ec_slavecount; i++) {
-                //     uint32 buf32;
-                //     uint8 buf8;
-                //     uint16 buf16;
-                //     READ<uint32>(i, 0x10F1, 2, buf32, "Heartbeat?");
-                //     WRITE<uint32>(i, 0x10F1, 2, buf32, 1, "Heartbeat");
-
-                //     WRITE<uint8>(i, 0x60c2, 1, buf8, 2, "Time period");
-                //     WRITE<uint16>(i, 0x2f75, 0, buf16, 2, "Interpolation timeout");
-                // }
-
-                for (int i = 0; i < ec_slavecount; i++)
-                {
-                    // READ<uint32>(i + 1, 0x6075, 0, buf32, "Motor Rated Current [in mA]");
-
-                    rated_torque(i) = READ<uint32>(i + 1, 0x6076, 0, buf32, "Motor Rated torque [in mA]"); // same as the motor rated current
-
-                    // READ<uint32>(i + 1, 0x1c12, 0, buf32, "rxPDO:0");
-                    // READ<uint32>(i + 1, 0x1c12, 1, buf32, "rxPDO:1");
-
-                    // READ<uint32>(i + 1, 0x1c13, 0, buf32, "txPDO:0");
-                    // READ<uint32>(i + 1, 0x1c13, 1, buf32, "txPDO:1");
-
-                    // READ<int32>(i + 1, 0x6064, 0, sbuf32, "*position actual value*");
-
-                    // WRITE<int8>(i + 1, 0x6060, 0, sbuf8, control_mode_int8, "OpMode");
-                    // READ<int8>(i + 1, 0x6061, 0, sbuf8, "OpMode display");
-
-                    WRITE<uint32>(i + 1, 0x6080, 0, buf32, max_velocity_uint(i), "*Max motor speed*");
-                    // READ<uint32>(i + 1, 0x6080, 0, buf32, "*Max motor speed*");
-
-                    WRITE<uint16>(i + 1, 0x6072, 0, buf16, (uint16)(max_torque * torque_multiplier(i)), "*Maximal torque*"); // per thousand of rated torque
-                    // READ<uint16>(i + 1, 0x6072, 0, buf16, "*Maximal torque*");                                               // per thousand of rated torque
-                }
-                for (int i = 0; i < ec_slavecount; i++)
-                {
-                    READ<uint32>(i + 1, 0x6065, 0, buf32, "Position following error window");
-                    READ<uint16>(i + 1, 0x6066, 0, buf16, "Position following error time out [ms]");
-                    READ<uint32>(i + 1, 0x6066, 0, buf32, "Position window");
-                    READ<uint32>(i + 1, 0x6067, 0, buf32, "Position window times [ms]");
-                }
-
-                // printf("exit here !!!!\n"); //HACK
-                // exit(1);
-
-                /* wait for all slaves to reach SAFE_OP state */
-                ec_statecheck(0, EC_STATE_SAFE_OP, EC_TIMEOUTSTATE * 4);
-
-                printf("segments : %d : %d %d %d %d\n", ec_group[0].nsegments, ec_group[0].IOsegment[0], ec_group[0].IOsegment[1], ec_group[0].IOsegment[2], ec_group[0].IOsegment[3]);
-                printf("Request operational state for all slaves\n");
-                expectedWKC = (ec_group[0].outputsWKC * 2) + ec_group[0].inputsWKC;
-                printf("Calculated expected workcounter %d\n", expectedWKC);
-                ec_slave[0].state = EC_STATE_OPERATIONAL;
-
-                for (size_t i = 0; i < NUM_TARGET; i++)
-                {
-                    target[i] = (struct tx_pdo_t *)(ec_slave[1 + i].outputs);
-                    val[i] = (struct rx_pdo_t *)(ec_slave[1 + i].inputs);
-
-                    //  * Drive state machine transistions
-                    //  *   0 -> 6 -> 7 -> 15
-                    target[i]->control_word = 0;
-                    target[i]->mode_of_operation = control_mode_int8;
-                }
-
-                /* send one valid process data to make outputs in slaves happy*/
                 ec_send_processdata();
                 ec_receive_processdata(EC_TIMEOUTRET);
-                /* request OP state for all slaves */
-                ec_writestate(0);
-                int chk = 200;
-                /* wait for all slaves to reach OP state */ // takes about 3 ms
-                do
+                ec_statecheck(0, EC_STATE_OPERATIONAL, 50000);
+            } while (chk-- && (ec_slave[0].state != EC_STATE_OPERATIONAL));
+            if (ec_slave[0].state != EC_STATE_OPERATIONAL)
+            {
+                printf("Not all slaves reached operational state.\n");
+                ec_readstate();
+                for (int i = 1; i <= ec_slavecount; i++)
                 {
-                    ec_send_processdata();
-                    ec_receive_processdata(EC_TIMEOUTRET);
-                    ec_statecheck(0, EC_STATE_OPERATIONAL, 50000);
-                } while (chk-- && (ec_slave[0].state != EC_STATE_OPERATIONAL));
-                if (ec_slave[0].state != EC_STATE_OPERATIONAL)
-                {
-                    printf("Not all slaves reached operational state.\n");
-                    ec_readstate();
-                    for (int i = 1; i <= ec_slavecount; i++)
+                    if (ec_slave[i].state != EC_STATE_OPERATIONAL)
                     {
-                        if (ec_slave[i].state != EC_STATE_OPERATIONAL)
-                        {
-                            printf("Slave %d State=0x%2.2x StatusCode=0x%4.4x : %s\n",
-                                   i, ec_slave[i].state, ec_slave[i].ALstatuscode, ec_ALstatuscode2string(ec_slave[i].ALstatuscode));
-                        }
+                        printf("Slave %d State=0x%2.2x StatusCode=0x%4.4x : %s\n",
+                               i, ec_slave[i].state, ec_slave[i].ALstatuscode, ec_ALstatuscode2string(ec_slave[i].ALstatuscode));
                     }
                 }
-                else // if (ec_slave[0].state == EC_STATE_OPERATIONAL)
+            }
+            else // if (ec_slave[0].state == EC_STATE_OPERATIONAL)
+            {
+                printf("Operational state reached for all slaves.\n");
+                inOP = TRUE;
+
+                // if (debug)
+                // {
+                //     printf("\ntarget[i]->control_word (hex): ");
+                //     for (size_t i = 0; i < NUM_TARGET; i++)
+                //     {
+                //         printf("%X ", target[i]->control_word);
+                //     }
+                //     printf("\nval[i]->status_word (hex): ");
+                //     for (size_t i = 0; i < NUM_TARGET; i++)
+                //     {
+                //         printf("%X ", val[i]->status_word);
+                //     }
+                //     printf("\n");
+                // }
+
+                int sleep_us = 10000;
+
+                for (int i = 1; i <= ec_slavecount; i++)
                 {
-                    printf("Operational state reached for all slaves.\n");
-                    inOP = TRUE;
-
-                    if (debug)
-                    {
-                        // if (loop_counter < 100)
-                        // {
-                        printf("\ntarget[i]->control_word (hex): ");
-                        for (size_t i = 0; i < NUM_TARGET; i++)
-                        {
-                            printf("%X ", target[i]->control_word);
-                        }
-                        printf("\n");
-
-                        printf("val[i]->status_word (hex): ");
-                        for (size_t i = 0; i < NUM_TARGET; i++)
-                        {
-                            printf("%X ", val[i]->status_word);
-                        }
-                        printf("\n");
-                        // }
-                    }
-                    //  * Drive state machine transistions
-                    //  *   0 -> 6 -> 7 -> 15
-                    int sleep_us = 10000;
-
-                    // for (int i = 0; i < ec_slavecount; i++)
-                    // {
-                    //     if (((val[i]->status_word >> 3) & 0b1) && ((val[i]->status_word >> 6) & 0b1 == 0))
-                    //     {
-                    //         // xxxx xxxx x0xx 1000b Fault
-                    //         // xxxx xxxx x0xx 1111b Fault reaction active
-                    //         target[i]->control_word = 128; // fault reset
-                    //     }
-                    // }
-
-                    // for (int i = 1; i <= ec_slavecount; i++) // 0 is broadcast
-                    // {
-                    //     READ<uint16>(i, 0x6041, 0, buf16, "*status word*");
-                    //     if (buf16 == 0x218)
-                    //     {
-                    //         WRITE<uint16>(i, 0x6040, 0, buf16, 128, "*control word*");
-                    //     }
-                    // }
-                    // for (int i = 1; i <= ec_slavecount; i++)
-                    // {
-                    //     READ<uint16>(i, 0x6040, 0, buf16, "*control word*");
-
-                    //     WRITE<uint16>(i, 0x6040, 0, buf16, 0, "*control word*");
-
-                    //     READ<uint16>(i, 0x6040, 0, buf16, "*control word* (after write)");
-                    // }
-                    // osal_usleep(sleep_us);
-                    // for (int i = 1; i <= ec_slavecount; i++)
-                    // {
-                    //     WRITE<uint16>(i, 0x6040, 0, buf16, 6, "*control word*");
-                    // }
-                    // osal_usleep(sleep_us);
-                    // for (int i = 1; i <= ec_slavecount; i++)
-                    // {
-                    //     WRITE<uint16>(i, 0x6040, 0, buf16, 7, "*control word*");
-                    // }
-                    // osal_usleep(sleep_us);
-                    // for (int i = 1; i <= ec_slavecount; i++)
-                    // {
-                    //     WRITE<uint16>(i, 0x6040, 0, buf16, 15, "*control word*"); // Fault reset
-                    // }
-                    // osal_usleep(sleep_us);
-
-                    for (int i = 1; i <= ec_slavecount; i++)
-                    {
-                        CHECKERROR(i);
-                        // READ<uint8>(i, 0x1001, 0, buf8, "Error Register");
-                    }
-
-                    // int reachedInitial = 0; //TODO CHAGE TO ARRAY FOR EACH MOTOR, THIS IS NOT USED
-
-                    // auto start = std::chrono::high_resolution_clock::now(); // timming code
-
-                    // for (i = 1; i <= 10000; i++) // TODO CHANGE
-                    while (!should_terminate)
-                    {
-                        _run_loop();
-                        loop_counter++;
-                    }
-
-                    // // // timming code: Get the end time
-                    // auto end = std::chrono::high_resolution_clock::now();
-                    // // Calculate the elapsed time
-                    // auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-                    // // Print the elapsed time
-                    // std::cout << "Elapsed time: " << elapsed.count() << " milliseconds" << std::endl;
-
-                    inOP = FALSE;
+                    CHECKERROR(i);
+                    // READ<uint8>(i, 0x1001, 0, buf8, "Error Register");
                 }
 
-                printf("\nRequest init state for all slaves\n");
-                ec_slave[0].state = EC_STATE_INIT;
-                /* request INIT state for all slaves */
-                ec_writestate(0);
+                // int reachedInitial = 0; //TODO CHAGE TO ARRAY FOR EACH MOTOR, THIS IS NOT USED
+
+                // auto start = std::chrono::high_resolution_clock::now(); // timming code
+
+                // for (i = 1; i <= 10000; i++) // TODO CHANGE
+                while (!should_terminate)
+                {
+                    _run_loop();
+                    loop_counter++;
+                }
+
+                // // // timming code: Get the end time
+                // auto end = std::chrono::high_resolution_clock::now();
+                // // Calculate the elapsed time
+                // auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+                // // Print the elapsed time
+                // std::cout << "Elapsed time: " << elapsed.count() << " milliseconds" << std::endl;
+
+                inOP = FALSE;
             }
 
-            printf("End ethercat motor, close socket\n");
-            /* stop SOEM, close socket */
-            ec_close();
+            printf("\nRequest init state for all slaves\n");
+            ec_slave[0].state = EC_STATE_INIT;
+            /* request INIT state for all slaves */
+            ec_writestate(0);
         }
+
+        // exit gracefully
+        printf("End ethercat motor, close socket\n");
+        /* stop SOEM, close socket */
+        ec_close();
+
         should_terminate = true;
     }
 
@@ -685,39 +676,39 @@ public:
                 {
                 case 0: // Not ready to switch on
                     /* code */
-                    printf("motor[%d] Not ready to switch on\n", i);
+                    printf("motor[%d] status_word=0x%-4X Not ready to switch on.\n", i, val[i]->status_word);
                     break;
-                case 64: // Switch on disabled
-                    printf("motor[%d] Switch on disabled\n", i);
+                case 64:                         // Switch on disabled
                     target[i]->control_word = 6; // 0b0110 shut down
+                    printf("motor[%d] status_word=0x%-4X Switch on disabled. sending control_word=0x%-4X\n", i, val[i]->status_word, target[i]->control_word);
                     break;
                 case 15: // Fault reaction active
-                    printf("motor[%d] Fault reaction active\n", i);
+                    printf("motor[%d] status_word=0x%-4X Fault reaction active\n", i, val[i]->status_word);
                     break;
                 case 8: // Fault
-                    printf("motor[%d] Fault\n", i);
                     uint8 buf8;
                     READ<uint8>(1, 0x1001, 0, buf8, "Error");
                     target[i]->control_word = 128;
+                    printf("motor[%d] status_word=0x%-4X Fault. sending control_word=0x%-4X\n", i, val[i]->status_word, target[i]->control_word);
                     break;
                 default:
                     break;
                 }
                 switch (val[i]->status_word & 111)
                 {
-                case 33: // Ready to switch on
-                    printf("motor[%d] Ready to switch on\n", i);
+                case 33:                         // Ready to switch on
                     target[i]->control_word = 7; // 0b0111 switch on
+                    printf("motor[%d] status_word=0x%-4X Ready to switch on. sending control_word=0x%-4X\n", i, val[i]->status_word, target[i]->control_word);
                     break;
-                case 35: // Switched on
-                    printf("motor[%d] Switched on\n", i);
+                case 35:                          // Switched on
                     target[i]->control_word = 15; // 0b1111 switch_on+enable_operation: switch_on=1, enable_voltage=1, quick_stop=1, enable_operation=1, fault_reset=0,halt=0
+                    printf("motor[%d] status_word=0x%-4X Switched on. sending control_word=0x%-4X\n", i, val[i]->status_word, target[i]->control_word);
                     break;
                 case 39: // Operation enabled
-                    printf("motor[%d] Operation enabled\n", i);
+                    printf("motor[%d] status_word=0x%-4X Operation enabled\n", i, val[i]->status_word);
                     break;
                 case 7: // Quick stop active
-                    printf("motor[%d] Quick stop active\n", i);
+                    printf("motor[%d] status_word=0x%-4X Quick stop active\n", i, val[i]->status_word);
                     break;
                 default:
                     break;
@@ -755,34 +746,32 @@ public:
         for (size_t i = 0; i < NUM_TARGET; i++)
         {
             target[i]->mode_of_operation = control_mode_int8; // TODO check why needs input again..
-            target[i]->velocity_offset = 0;                   // TODO check why needs input again..
-            target[i]->torque_offset = 0;
-
-            // SET INITAL GOAL
-            // target[i]->control_word = 0; // stop
-            target[i]->max_torque = (uint16)(max_torque * torque_multiplier(i));
+            target[i]->max_torque = (uint16)(max_torque(i) * torque_multiplier(i));
             if (control_mode_int8 == CONTROL_MODE::CYCLIC_SYNC_POSITION) // csp
             {
                 // uint32 buf32;
                 // READ<uint32>(1, 0x6080, 0,buf32, "*max velocity*");
-                // WRITE<uint32>(1, 0x6080, 0, buf32, 100000, "*max velocity*"); osal_usleep(100000);
-                target[i]->target_position = target_int32(i);
-                target[i]->target_velocity = 0;
-                target[i]->target_torque = 0;
+                // WRITE<uint32>(1, 0x6080, 0, buf32, 100000, "*max velocity*");
+                target[i]->target_position = target_position_int32(i);
+                // target[i]->target_velocity = 0;
+                target[i]->velocity_offset = velocity_offset_int32(i);
+                // target[i]->target_torque = 0;
+                target[i]->torque_offset = torque_offset_int16(i);
             }
             else if (control_mode_int8 == CONTROL_MODE::CYCLIC_SYNC_VELOCITY) // csv
             {
-                target[i]->target_position = 0;
-                target[i]->target_velocity = target_int32(i);
-                target[i]->target_torque = 0;
-                // target[i]->velocity_offset = 10000;//example of adding velocity offset
+                // target[i]->target_position = 0;
+                target[i]->target_velocity = target_velocity_int32(i);
+                // target[i]->target_torque = 0;
+                target[i]->velocity_offset = velocity_offset_int32(i);
+                target[i]->torque_offset = torque_offset_int16(i);
             }
             else if (control_mode_int8 == CONTROL_MODE::CYCLIC_SYNC_TORQUE) // csv
             {
-
-                target[i]->target_position = 0;
-                target[i]->target_velocity = 0;
-                target[i]->target_torque = target_int32(i);
+                // target[i]->target_position = 0;
+                // target[i]->target_velocity = 0;
+                target[i]->target_torque = target_torque_int16(i);
+                target[i]->torque_offset = torque_offset_int16(i);
             }
         }
 
@@ -799,30 +788,28 @@ public:
                 actual_velocity(i) = (double)(val[i]->velocity_actual) / gear_ratio(i) * (2 * M_PI) / 131072;
                 actual_torque_raw(i) = (double)(val[i]->torque_actual);
             }
-            actual_torque = actual_torque_raw.cwiseProduct(rated_torque) * 1e-3;
+            actual_torque = actual_torque_raw.cwiseProduct(rated_torque) * 1e-6;
 
-            if (debug)
-            {
-                if (loop_counter < 10)
-                {
-                    printf("in loop counter: %d\n", loop_counter);
-                    printf("\ntarget[i]->control_word (hex): ");
-                    for (size_t i = 0; i < NUM_TARGET; i++)
-                    {
-                        printf("%X ", target[i]->control_word);
-                    }
-                    printf("\n");
+            // if (debug)
+            // {
+            //     if (loop_counter < 10)
+            //     {
+            //         printf("in loop counter: %d\n", loop_counter);
+            //         printf("\ntarget[i]->control_word (hex): ");
+            //         for (size_t i = 0; i < NUM_TARGET; i++)
+            //         {
+            //             printf("%X ", target[i]->control_word);
+            //         }
+            //         printf("\nval[i]->status_word (hex): ");
+            //         for (size_t i = 0; i < NUM_TARGET; i++)
+            //         {
+            //             printf("%X ", val[i]->status_word);
+            //         }
+            //         printf("\n");
+            //     }
+            // }
 
-                    printf("val[i]->status_word (hex): ");
-                    for (size_t i = 0; i < NUM_TARGET; i++)
-                    {
-                        printf("%X ", val[i]->status_word);
-                    }
-                    printf("\n");
-                }
-            }
-
-            if (should_print)
+            if (should_print && loop_counter % 10 == 0)
             {
                 printf("\npos_tar:");
                 for (int i = 0; i < NUM_TARGET; i++)
@@ -849,6 +836,7 @@ public:
                 {
                     printf("%8.5f,", actual_torque(i)); // TODO compute torque conversion
                 }
+                printf("\n");
 
                 // printf("\ntarget[i]->control_word (hex): ");
                 // for (size_t i = 0; i < NUM_TARGET; i++)
@@ -1017,6 +1005,13 @@ private:
     boolean inOP = FALSE;               // Flag indicating if slaves are in operational state.
     uint8 currentgroup = 0;             // Currently active EtherCAT group.
     boolean forceByteAlignment = FALSE; // Flag to control byte alignment of IO memory.
+
+    // placeholder for reading/writing buffer
+    uint32 buf32;
+    uint16 buf16;
+    uint8 buf8;
+    int8 sbuf8;
+    int32 sbuf32;
 };
 
 #endif /* _ETHERCAT_MOTOR_H */

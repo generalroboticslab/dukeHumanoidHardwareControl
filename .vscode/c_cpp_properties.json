@@ -4,8 +4,8 @@
             "name": "Linux",
             "includePath": [
                 "${workspaceFolder}/**",
-                "/home/grl/repo/micromamba/envs/py38/include/**",
-                "/home/grl/repo/micromamba/envs/py38/include",
+                "${env:HOME}/repo/micromamba/envs/py38/include/**",
+                "${env:HOME}/repo/micromamba/envs/py38/include",
                 "${workspaceFolder}/SOEM/soem"
             ],
             "defines": [],

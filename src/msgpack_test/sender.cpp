@@ -33,8 +33,8 @@ int main() {
     // inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr); 
 
     server_addr.sin_port = htons(9870); 
-    // inet_pton(AF_INET, "0.0.0.1", &server_addr.sin_addr); 
-    inet_pton(AF_INET, "10.197.197.153", &server_addr.sin_addr); 
+    inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr); 
+    // inet_pton(AF_INET, "10.197.197.153", &server_addr.sin_addr); 
 
     // lab2: 10.194.20.206
 

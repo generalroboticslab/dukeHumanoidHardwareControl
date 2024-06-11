@@ -122,9 +122,8 @@ PYBIND11_MODULE(ethercat_motor_py, m)
 
    py::class_<PyMotor>(m, "PyMotor", py::dynamic_attr())
        .def(py::init<const std::string &, int8_t, double, double>())
-       .def(py::init<const std::string &, int8_t, double, double>())
        .def("set_should_terminate", &PyMotor::set_should_terminate)
-       .def_readonly("target_int32", &PyMotor::target_int32) // Bind the run function
+      //  .def_readonly("target_int32", &PyMotor::target_int32) // Bind the run function
        .def_readwrite("control_mode_int8", &PyMotor::control_mode_int8)
        .def_readwrite("should_print", &PyMotor::should_print)
        .def_readwrite("debug", &PyMotor::debug)
@@ -133,11 +132,13 @@ PYBIND11_MODULE(ethercat_motor_py, m)
        .def_readonly("actual_position_error", &PyMotor::actual_position_error)
        .def_readonly("actual_velocity", &PyMotor::actual_velocity)
        .def_readonly("actual_torque_raw", &PyMotor::actual_torque_raw)
-
       //  .def_readwrite("tx_pdo_example", &PyMotor::tx_pdo_example)
        .def("set_target_input", &PyMotor::set_target_input)
       //  .def("set_target_input", [](){
       //  })
        .def("set_target_position_offset", &PyMotor::set_target_position_offset,py::arg().noconvert())
+       .def("set_velocity_offset", &PyMotor::set_velocity_offset,py::arg().noconvert())
+       .def("set_torque_offset", &PyMotor::set_torque_offset,py::arg().noconvert())
+       .def("set_max_torque", &PyMotor::set_max_torque,py::arg().noconvert())
        .def("run", &PyMotor::run_in_background);
 }

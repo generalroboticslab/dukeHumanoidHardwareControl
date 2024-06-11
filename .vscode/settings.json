@@ -1,4 +1,11 @@
 {
+    // https://github.com/microsoft/vscode-cmake-tools/blob/main/docs/cmake-settings.md
+    "cmake.generator":"Ninja",
+    "cmake.configureSettings": {
+        "CMAKE_PREFIX_PATH": "${env:HOME}/repo/micromamba/envs/py38", // conda env
+        "Python_EXECUTABLE": "${env:HOME}/repo/micromamba/envs/py38/bin/python",
+        "CMAKE_TOOLCHAIN_FILE":"${env:HOME}/repo/vcpkg/scripts/buildsystems/vcpkg.cmake",
+    },
     "files.associations": {
         "compare": "cpp",
         "concepts": "cpp",
@@ -75,13 +82,13 @@
         "future": "cpp",
         "span": "cpp",
         "valarray": "cpp",
-        "dense": "cpp"
-    },
-    // https://github.com/microsoft/vscode-cmake-tools/blob/main/docs/cmake-settings.md
-    "cmake.generator":"Ninja",
-    "cmake.configureSettings": {
-        "CMAKE_PREFIX_PATH": "/home/grl/repo/micromamba/envs/py38", // conda env
-        "Python_EXECUTABLE": "/home/grl/repo/micromamba/envs/py38/bin/python",
-        "CMAKE_TOOLCHAIN_FILE":"/home/grl/repo/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "dense": "cpp",
+        "core": "cpp",
+        "geometry": "cpp",
+        "svd": "cpp",
+        "qr": "cpp",
+        "eigenvalues": "cpp",
+        "lu": "cpp",
+        "cholesky": "cpp"
     }
 }

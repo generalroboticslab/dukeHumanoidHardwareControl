@@ -21,7 +21,7 @@ Joint Monkey
 # os.environ["LD_LIBRARY_PATH"] = "/home/grl/repo/micromamba/envs/py38/lib"
 
 # sudo LD_LIBRARY_PATH=/home/grl/repo/micromamba/envs/py38/lib /home/grl/repo/micromamba/envs/py38/bin/python joint_monkey.py
-
+#  py38 && export LD_LIBRARY_PATH=${CONDA_PREFIX}/lib && sudo $(which python) joint_monkey.py
 import math
 import numpy as np
 from isaacgym import gymapi, gymutil
@@ -134,8 +134,8 @@ class AssetDesc:
 
 asset_root = "../assets/" # change to your asset root folder
 asset_descriptors = [
-    AssetDesc("urdf/legURDFv2/legURDFv2.urdf", False),
-    # AssetDesc("urdf/legURDF/legURDF.urdf", False),
+    # AssetDesc("urdf/legURDFv2/legURDFv2.urdf", False),
+    AssetDesc("urdf/legURDF/legURDF.urdf", False),
     # AssetDesc("biped_schematics/biped_schematics.urdf", False),
     # AssetDesc("mjcf/nv_humanoid.xml", False),
     # AssetDesc("mjcf/nv_ant.xml", False),
