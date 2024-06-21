@@ -411,7 +411,7 @@ public:
         if (ecx_config_init(&ecx_context, false) <= 0)
         {
             printf("\033[31;1mNo slaves found!\n"
-                   "check if the slave is powered on or try resetting the adaptor:\n"
+                   "check if the slave is powered on or try resetting the adaptor with:\n"
                    "sudo ip link set %s down\nsudo ip link set %s up\n\033[0m\n",
                    ifname.c_str(), ifname.c_str());
             return -1;
@@ -429,13 +429,11 @@ public:
             int expected_wkc=25;
             if (wkc != expected_wkc)
             {
-                printf("error: ELMOsetupGOLD\n expected_wkc=%d, actual wkc=%d",expected_wkc,wkc); // TODO add expeted wkc
+                printf("\033[31merror: ELMOsetupGOLD\n expected_wkc=%d, actual wkc=%d\033[39m \n",expected_wkc,wkc); // TODO add expeted wkc
                         // exit(1);
             };
         }
 
-        // ELMOsetupGOLD successful
-        printf("%d slaves found and configured.\n", ec_slavecount);
 
         if (forceByteAlignment)
         {
@@ -447,17 +445,22 @@ public:
             ecx_config_map_group_aligned(&ecx_context, &IOmap, 0);
             // ec_config_map(&IOmap);
         }
+        // ELMOsetupGOLD successful
+        printf("%d slaves found and configured.\n", ec_slavecount);
 
-        /* wait for all slaves to reach SAFE_OP state */
-        ec_statecheck(0, EC_STATE_PRE_OP, EC_TIMEOUTSTATE * 4);
 
         // show slave info
+        if(should_print){
         for (int i = 1; i <= ec_slavecount; i++)
         {
             printf("\nSlave:%d\n Name:%s\n Output size: %dbits\n Input size: %dbits\n State: %d\n Delay: %d[ns]\n Has DC: %d\n",
                    i, ec_slave[i].name, ec_slave[i].Obits, ec_slave[i].Ibits,
                    ec_slave[i].state, ec_slave[i].pdelay, ec_slave[i].hasdc);
         }
+        }
+
+        /* wait for all slaves to reach SAFE_OP state */
+        ec_statecheck(0, EC_STATE_PRE_OP, EC_TIMEOUTSTATE * 4);
         printf("Slaves mapped, state to SAFE_OP.\n");
 
         // /** disable heartbeat alarm */
