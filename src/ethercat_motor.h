@@ -41,7 +41,7 @@ using VectorNd = Eigen::Matrix<ScalarType, NumElements, 1>;
 
 #define NUM_TARGET 10 // num of motors
 
-const VectorNd<double, 10> gear_ratio_all = {18, 20, 18, 18, 10,10,18,18,20,18}; // hack max 6 motors
+const VectorNd<double, 10> gear_ratio_all = {18, 20, 18, 18, 10,18, 20, 18, 18, 10}; // hack max 6 motors
 const VectorNd<double, 10> torque_multiplier_all = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
 
 // 2020-20 motor current torue ratio: toruqe [NM] = 2.0 * current [A] (from measurement)
@@ -89,31 +89,34 @@ void print_eigen_vec(T vector, const char format[], const char pre[], const char
 }
 
 template <typename T>
-int READ(int slaveId, int idx, int sub, T &buf, const std::string &comment)
+int READ(int slaveId, int idx, int sub, T &buf, const std::string &comment, bool verbose = true)
 { // blocking, takes about 2ms
     buf = 0;
     int __s = sizeof(buf);
     int wkc = ec_SDOread(slaveId, idx, sub, FALSE, &__s, &buf, EC_TIMEOUTRXM);
+    if (verbose) {
     // printf("Slave: %d - Read at 0x%04x:%d => wkc: %d; data: 0x%.*x (%d)\t[%s]\n", slaveId, idx, sub, wkc, __s, (unsigned int)buf, (unsigned int)buf, comment.c_str());
     // ANSI Code based on wkc, print in red if wkc==0
     const char *colorCode = (wkc == 0) ? "\033[31;1m" : "";
     printf("%sSlave:%2d - READ  at 0x%04x:%d => wkc: %d; data: 0x%.*x (%d)\t[%s]\033[0m\n",
            colorCode, slaveId, idx, sub, wkc, __s, (unsigned int)buf, (unsigned int)buf, comment.c_str());
+    }
     return wkc;
 }
 
 template <typename T>
-int WRITE(int slaveId, int idx, int sub, T &buf, int value, const std::string &comment)
+int WRITE(int slaveId, int idx, int sub, T &buf, int value, const std::string &comment , bool verbose = true)
 { // blocking, takes about 2ms
     buf = value;
     int __s = sizeof(buf);
     int wkc = ec_SDOwrite(slaveId, idx, sub, FALSE, __s, &buf, EC_TIMEOUTRXM);
+    if (verbose){
     // printf("Slave: %d - Write at 0x%04x:%d => wkc: %d; data: 0x%.*x (%d)\t{%s}\n", slaveId, idx, sub, wkc, __s, (unsigned int)buf, (unsigned int)buf, comment.c_str());
     // ANSI Code based on wkc, print in red if wkc==0
     const char *colorCode = (wkc == 0) ? "\033[31;1m" : "";
     printf("%sSlave:%2d - WRITE at 0x%04x:%d => wkc: %d; data: 0x%.*x (%d)\t[%s]\033[0m\n",
            colorCode, slaveId, idx, sub, wkc, __s, (unsigned int)buf, (unsigned int)buf, comment.c_str());
-
+    }
     return wkc;
 }
 
@@ -188,11 +191,10 @@ int ELMOsetupGOLD(ecx_contextt *context, uint16 slave)
     wkc += ec_SDOwrite(slave, 0x1c12, 0x00, FALSE, sizeof(enable_bits), &(enable_bits), EC_TIMEOUTSTATE);
     wkc += ec_SDOwrite(slave, 0x1c13, 0x00, FALSE, sizeof(enable_bits), &(enable_bits), EC_TIMEOUTSTATE);
 
-    int8 op_mode = CONTROL_MODE::CYCLIC_SYNC_POSITION; // 8:position 9:velocity 10:torque
+    int8 op_mode = CONTROL_MODE::CYCLIC_SYNC_VELOCITY; // 8:position 9:velocity 10:torque
     // de0x6060      "Modes of operation"
     wkc += ec_SDOwrite(slave, 0x6060, 0x00, FALSE, sizeof(op_mode), &op_mode, EC_TIMEOUTSTATE); //    cyclic sychronous position mode
-    printf("supported drive modes: %d\n", op_mode);
-
+    // printf("supported drive modes: %d\n", op_mode);
     printf("ELMOsetupGOLD(): slave:%d wkc: %d\n", slave, wkc);
 
     return wkc;
@@ -224,9 +226,9 @@ public:
     VectorNd<double, NUM_TARGET> actual_velocity = VectorNd<double, NUM_TARGET>::Zero();       // actual velocity [rad/s]
 
     VectorNd<double, NUM_TARGET> actual_torque_raw = VectorNd<double, NUM_TARGET>::Zero(); // actual torque (raw) as of 0.1% rated torque
-    VectorNd<double, NUM_TARGET> actual_torque = VectorNd<double, NUM_TARGET>::Zero();     // actual torque in [mA] actual_torque=actual_torque_raw*rated_torque*1e-3
+    VectorNd<double, NUM_TARGET> actual_torque = VectorNd<double, NUM_TARGET>::Zero();     // actual torque in [A] actual_torque=actual_torque_raw*rated_torque*1e-3
 
-    VectorNd<double, NUM_TARGET> rated_torque = VectorNd<double, NUM_TARGET>::Zero(); // actual velocity (raw) in rated current [mA]
+    VectorNd<double, NUM_TARGET> rated_torque = VectorNd<double, NUM_TARGET>::Zero(); // actual velocity (raw) in rated current [A]
 
     VectorNd<uint16, NUM_TARGET> status_word = VectorNd<uint16, NUM_TARGET>::Zero(); // status word
 
@@ -451,12 +453,12 @@ public:
 
         // show slave info
         if(should_print){
-        for (int i = 1; i <= ec_slavecount; i++)
-        {
-            printf("\nSlave:%d\n Name:%s\n Output size: %dbits\n Input size: %dbits\n State: %d\n Delay: %d[ns]\n Has DC: %d\n",
-                   i, ec_slave[i].name, ec_slave[i].Obits, ec_slave[i].Ibits,
-                   ec_slave[i].state, ec_slave[i].pdelay, ec_slave[i].hasdc);
-        }
+            for (int i = 1; i <= ec_slavecount; i++)
+            {
+                printf("\nSlave:%d\n Name:%s\n Output size: %dbits\n Input size: %dbits\n State: %d\n Delay: %d[ns]\n Has DC: %d\n",
+                    i, ec_slave[i].name, ec_slave[i].Obits, ec_slave[i].Ibits,
+                    ec_slave[i].state, ec_slave[i].pdelay, ec_slave[i].hasdc);
+            }
         }
 
         /* wait for all slaves to reach SAFE_OP state */
@@ -479,8 +481,8 @@ public:
         {
             // READ<uint32>(i + 1, 0x6075, 0, buf32, "Motor Rated Current [in mA]");
 
-            READ<uint32>(i + 1, 0x6076, 0, buf32, "Motor Rated torque [in mA]"); // same as the motor rated current
-            rated_torque(i) = buf32;
+            READ<uint32>(i + 1, 0x6076, 0, buf32, "Motor Rated torque [in mA]", should_print); // same as the motor rated current
+            rated_torque(i) = ((double)buf32)*1e-3; // 1mA = 1e-3A
 
             // READ<uint32>(i + 1, 0x1c12, 0, buf32, "rxPDO:0");
             // READ<uint32>(i + 1, 0x1c12, 1, buf32, "rxPDO:1");
@@ -488,16 +490,18 @@ public:
             // READ<uint32>(i + 1, 0x1c13, 0, buf32, "txPDO:0");
             // READ<uint32>(i + 1, 0x1c13, 1, buf32, "txPDO:1");
 
-            READ<int32>(i + 1, 0x6064, 0, sbuf32, "*position actual value*");
+            READ<uint32>(i + 1, 0x6079, 0, buf32, "DC link circuit voltage", should_print);
+
+            READ<int32>(i + 1, 0x6064, 0, sbuf32, "*position actual value*", should_print);
             actual_position(i) = (double)(sbuf32) / gear_ratio(i) * (2 * M_PI) / 131072;
 
             // WRITE<int8>(i + 1, 0x6060, 0, sbuf8, control_mode_int8, "OpMode");
             // READ<int8>(i + 1, 0x6061, 0, sbuf8, "OpMode display");
 
-            WRITE<uint32>(i + 1, 0x6080, 0, buf32, max_velocity_uint(i), "*Max motor speed*");
+            WRITE<uint32>(i + 1, 0x6080, 0, buf32, max_velocity_uint(i), "*Max motor speed*",should_print);
             // READ<uint32>(i + 1, 0x6080, 0, buf32, "*Max motor speed*");
 
-            WRITE<uint16>(i + 1, 0x6072, 0, buf16, (uint16)(max_torque(i) * torque_multiplier(i)), "*Maximal torque*"); // per thousand of rated torque
+            WRITE<uint16>(i + 1, 0x6072, 0, buf16, (uint16)(max_torque(i) * torque_multiplier(i)), "*Maximal torque*",should_print); // per thousand of rated torque
             // READ<uint16>(i + 1, 0x6072, 0, buf16, "*Maximal torque*");                                               // per thousand of rated torque
 
             //     READ<uint32>(i + 1, 0x6065, 0, buf32, "Position following error window");
@@ -689,11 +693,29 @@ public:
                     printf("motor[%d] status_word=0x%-4X Fault reaction active\n", i, val[i]->status_word);
                     break;
                 case 8: // Fault
-                    uint8 buf8;
-                    READ<uint8>(1, 0x1001, 0, buf8, "Error");
+                    uint8 buf8; // HACK TODO change back 
+                    uint16 buf16;
+                    uint32 buf32;
+                    READ<uint8>(1+i, 0x1001, 0, buf8, "Error 0x1001");
+
+                    READ<uint8>(1+i, 0x1003, 0, buf8, "Error code 0x1003");
+
+                    for (uint8 j = 1; j < buf8+1; j++) {
+                        READ<uint32>(1+i, 0x1003, j, buf32, "Error code 0x1003");
+                    }
+
+                    READ<uint16>(1+i, 0x603F, 0, buf16, "Error code 0x603F");
+                    int16 buf_int16;
+                    READ<int16>(1+i, 0x605A, 0, buf_int16, "Quick stop option code 0x605A");
+
+
                     target[i]->control_word = 128;
                     printf("motor[%d] status_word=0x%-4X Fault. sending control_word=0x%-4X\n", i, val[i]->status_word, target[i]->control_word);
+                    
+                    
+                    // exit(1);
                     break;
+
                 default:
                     break;
                 }
@@ -791,7 +813,7 @@ public:
                 actual_velocity(i) = (double)(val[i]->velocity_actual) / gear_ratio(i) * (2 * M_PI) / 131072;
                 actual_torque_raw(i) = (double)(val[i]->torque_actual);
             }
-            actual_torque = actual_torque_raw.cwiseProduct(rated_torque) * 1e-6;
+            actual_torque = actual_torque_raw.cwiseProduct(rated_torque) * 1e-3;
 
             // if (debug)
             // {
@@ -812,8 +834,18 @@ public:
             //     }
             // }
 
-            if (should_print && loop_counter % 10 == 0)
+
+
+
+            if (should_print && loop_counter % 50 == 0)
             {
+                // printf("\nvoltage: ");
+                // for (int i = 0; i < NUM_TARGET; i++)
+                // {
+                //     READ<uint32>(i + 1, 0x6079, 0, buf32, "DC link circuit voltage", false);
+                //     printf("%8d,", buf32);
+                // }
+
                 printf("\npos_tar:");
                 for (int i = 0; i < NUM_TARGET; i++)
                 {
