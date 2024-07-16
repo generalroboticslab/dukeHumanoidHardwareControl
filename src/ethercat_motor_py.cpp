@@ -127,18 +127,22 @@ PYBIND11_MODULE(ethercat_motor_py, m)
        .def_readwrite("control_mode_int8", &PyMotor::control_mode_int8)
        .def_readwrite("should_print", &PyMotor::should_print)
        .def_readwrite("debug", &PyMotor::debug)
-
+       .def_readonly("rated_torque", &PyMotor::rated_torque)
        .def_readonly("actual_position", &PyMotor::actual_position)
        .def_readonly("actual_position_error", &PyMotor::actual_position_error)
        .def_readonly("actual_velocity", &PyMotor::actual_velocity)
        .def_readonly("actual_torque_raw", &PyMotor::actual_torque_raw)
+       .def_readonly("actual_torque", &PyMotor::actual_torque)
       //  .def_readwrite("tx_pdo_example", &PyMotor::tx_pdo_example)
        .def("set_target_input", &PyMotor::set_target_input)
       //  .def("set_target_input", [](){
       //  })
+       .def("set_target_position", &PyMotor::set_target_position,py::arg().noconvert())
+       .def("set_target_velocity", &PyMotor::set_target_velocity,py::arg().noconvert())
+       .def("set_target_torque", &PyMotor::set_target_torque,py::arg().noconvert())
        .def("set_target_position_offset", &PyMotor::set_target_position_offset,py::arg().noconvert())
        .def("set_velocity_offset", &PyMotor::set_velocity_offset,py::arg().noconvert())
        .def("set_torque_offset", &PyMotor::set_torque_offset,py::arg().noconvert())
        .def("set_max_torque", &PyMotor::set_max_torque,py::arg().noconvert())
-       .def("run", &PyMotor::run_in_background);
+       .def("run", &PyMotor::run_in_background,R"pbdoc(Starts the motor control loop in a background thread.)pbdoc");
 }
