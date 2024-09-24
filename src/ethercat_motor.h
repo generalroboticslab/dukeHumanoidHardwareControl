@@ -32,6 +32,8 @@
 #include <Eigen/Dense>
 // #include <Eigen/Core>
 
+#include "Iir.h"  // Include the iir1 library header
+
 #include "ethercat.h"
 
 template <typename ScalarType, int NumElements>
@@ -203,8 +205,12 @@ int ELMOsetupGOLD(ecx_contextt *context, uint16 slave)
 class Motor
 {
 public:
+
     bool debug = true;
     bool should_print = true;
+
+    int counter = 0;
+    int previous_counter = 0;
 
     VectorNd<double, NUM_TARGET> target_position = VectorNd<double, NUM_TARGET>::Zero();        // target position [rad]
     VectorNd<double, NUM_TARGET> target_position_offset = VectorNd<double, NUM_TARGET>::Zero(); // target position offset [rad]
@@ -224,6 +230,9 @@ public:
     VectorNd<double, NUM_TARGET> actual_position = VectorNd<double, NUM_TARGET>::Zero();       // actual position [rad]
     VectorNd<double, NUM_TARGET> actual_position_error = VectorNd<double, NUM_TARGET>::Zero(); // actual position error [rad]
     VectorNd<double, NUM_TARGET> actual_velocity = VectorNd<double, NUM_TARGET>::Zero();       // actual velocity [rad/s]
+    VectorNd<double, NUM_TARGET> actual_velocity_filtered = VectorNd<double, NUM_TARGET>::Zero(); // actual velocity error [rad/s]
+
+    // VectorNd<double, NUM_TARGET> actual_velocity_measured = VectorNd<double, NUM_TARGET>::Zero(); // actual velocity [rad/s] calculated by finite difference method
 
     VectorNd<double, NUM_TARGET> actual_torque_raw = VectorNd<double, NUM_TARGET>::Zero(); // actual torque (raw) as of 0.1% rated torque
     VectorNd<double, NUM_TARGET> actual_torque = VectorNd<double, NUM_TARGET>::Zero();     // actual torque in [A] actual_torque=actual_torque_raw*rated_torque*1e-3
@@ -237,6 +246,25 @@ public:
     VectorNd<double, NUM_TARGET> torque_multiplier = torque_multiplier_all.head(NUM_TARGET);
 
     VectorNd<double, NUM_TARGET> max_torque = VectorNd<double, NUM_TARGET>::Zero();
+
+    
+    // robot specific only
+    double rotor_current_to_torque_ratio = 0.165;
+    bool use_position_pd = false;
+    double kp = 60;
+    double kd = 5;
+    VectorNd<double, NUM_TARGET> position_offset = VectorNd<double, NUM_TARGET>::Zero(); // motor position offset [rad]
+    VectorNd<double, NUM_TARGET> actual_position_after_offset = VectorNd<double, NUM_TARGET>::Zero(); // actual motor position after offset [rad]
+
+    VectorNd<double, NUM_TARGET> dof_position = VectorNd<double, NUM_TARGET>::Zero(); // dof position [rad]
+    VectorNd<double, NUM_TARGET> dof_velocity = VectorNd<double, NUM_TARGET>::Zero(); // dof velocity [rad/s]
+    VectorNd<double, NUM_TARGET> target_dof_position = VectorNd<double, NUM_TARGET>::Zero();  // target dof position [rad]
+    VectorNd<double, NUM_TARGET> target_dof_torque_Nm = VectorNd<double, NUM_TARGET>::Zero();  // target dof velocity [rad/s]
+    VectorNd<double, NUM_TARGET> target_dof_torque_Nm_filtered = VectorNd<double, NUM_TARGET>::Zero();  // target dof velocity [rad/s]
+
+    // timing variables
+    std::chrono::high_resolution_clock::time_point t;
+    double dt_measured = 0;
 
     std::string ifname; // use ifconfig in commandline to find the ethernet name
 
@@ -258,13 +286,29 @@ public:
 
     bool init_successful = false;
 
+    const int sampling_rate=2000; // 4000; // sampling frequency [Hz]
+    const int sleep_us = 1000000/sampling_rate;
+    double cutoff_frequency_for_actual_velocity = 800;
+    double cutoff_frequency_for_target_dof_torque_Nm = 800;
+    Iir::Butterworth::LowPass<4> filter_for_actual_velocity[NUM_TARGET]; 
+    Iir::Butterworth::LowPass<4> filter_target_dof_torque_Nm[NUM_TARGET]; 
+
+    void setup_filter(){
+
+        for (int i = 0; i < NUM_TARGET; i++)
+        {
+            filter_for_actual_velocity[i].setup(sampling_rate, cutoff_frequency_for_actual_velocity);
+            filter_target_dof_torque_Nm[i].setup(sampling_rate, cutoff_frequency_for_target_dof_torque_Nm);
+        }
+    }
+
     Motor()
     {
-        std::string ifname = "enp3s0";
-        double max_velocity = 0.5;
-        double max_torque = 20;
-        double control_mode_int8 = CONTROL_MODE::CYCLIC_SYNC_VELOCITY;
-        _init(ifname, control_mode_int8, max_velocity, max_torque);
+        // std::string ifname = "enp3s0";
+        // double max_velocity = 0.5;
+        // double max_torque = 20;
+        // double control_mode_int8 = CONTROL_MODE::CYCLIC_SYNC_VELOCITY;
+        // _init(ifname, control_mode_int8, max_velocity, max_torque);
     }
 
     Motor(const std::string &ifname, int8_t control_mode_int8, double max_velocity, double max_torque)
@@ -285,6 +329,13 @@ public:
         }
         print_eigen_vec(max_velocity_uint, "%u ", "max_velocity_uint: ");
         configure();
+
+        // setup_filter();
+        setup_filter();
+    }
+    
+    void set_position_offset(const Eigen::Ref<Eigen::VectorXd> _position_offset){
+        position_offset = _position_offset;
     }
 
     void set_max_torque(const Eigen::Ref<Eigen::VectorXd> _max_torque)
@@ -357,6 +408,44 @@ public:
         {
             set_target_torque(target_input);
         }
+    }
+
+    // Eigen::VectorXd _dof_value_to_motor_value(const Eigen::Ref<Eigen::VectorXd> dof_value){
+    //     Eigen::VectorXd motor_value = dof_value;
+    //     motor_value(4) += dof_value(3);
+    //     motor_value(9) += dof_value(8);
+    //     return motor_value;
+    // }
+
+    Eigen::VectorXd  _motor_value_to_dof_value(const Eigen::Ref<Eigen::VectorXd> motor_value){
+        Eigen::VectorXd dof_value = motor_value;
+        dof_value(4) = dof_value(4) - motor_value(3);
+        dof_value(9) = dof_value(9) - motor_value(8);
+        return dof_value;
+    }
+
+    void update_torque_by_pd(){  
+
+        target_dof_torque_Nm = (kp*(target_dof_position-dof_position)-kd*dof_velocity).cwiseProduct(torque_multiplier);
+
+
+        for (int i = 0; i < NUM_TARGET; i++)
+        {
+            target_dof_torque_Nm_filtered(i) = filter_target_dof_torque_Nm[i].filter(target_dof_torque_Nm(i));
+        }
+
+        Eigen::VectorXd target_dof_torque_A = target_dof_torque_Nm.cwiseQuotient(gear_ratio*rotor_current_to_torque_ratio);
+
+        target_torque_raw =(target_dof_torque_A.cwiseQuotient(rated_torque)*1000.0);//.cwiseMin(-1000).cwiseMax(1000);
+        target_torque_int16 = target_torque_raw.cast<int16>(); // NO offset applied //TODO CHANGE TO INT16
+    }
+
+    void update_dof_position_and_velocity(){
+        
+        actual_position_after_offset = actual_position-position_offset;
+        dof_position = _motor_value_to_dof_value(actual_position_after_offset);
+        dof_velocity = _motor_value_to_dof_value(actual_velocity_filtered);
+
     }
 
     ~Motor()
@@ -463,7 +552,7 @@ public:
 
         /* wait for all slaves to reach SAFE_OP state */
         ec_statecheck(0, EC_STATE_PRE_OP, EC_TIMEOUTSTATE * 4);
-        printf("Slaves mapped, state to SAFE_OP.\n");
+        printf("Slaves mapped, state to SAFE_OP.\n\n");
 
         // /** disable heartbeat alarm */
         // for (int i = 1; i <= ec_slavecount; i++) {
@@ -477,38 +566,80 @@ public:
         //     WRITE<uint16>(i, 0x2f75, 0, buf16, 2, "Interpolation timeout");
         // }
 
+
+        VectorNd<uint32, NUM_TARGET> max_motor_acceleration = VectorNd<uint32, NUM_TARGET>::Zero();
+        VectorNd<uint32, NUM_TARGET> max_motor_deceleration = VectorNd<uint32, NUM_TARGET>::Zero();
+        VectorNd<uint32, NUM_TARGET> dc_link_voltage = VectorNd<uint32, NUM_TARGET>::Zero();
+
         for (int i = 0; i < ec_slavecount; i++)
         {
-            // READ<uint32>(i + 1, 0x6075, 0, buf32, "Motor Rated Current [in mA]");
-
-            READ<uint32>(i + 1, 0x6076, 0, buf32, "Motor Rated torque [in mA]", should_print); // same as the motor rated current
+            // read rated torque from slave
+            READ<uint32>(i + 1, 0x6076, 0, buf32, "Motor Rated torque [in mA]", false); // same as the motor rated current
             rated_torque(i) = ((double)buf32)*1e-3; // 1mA = 1e-3A
-
-            // READ<uint32>(i + 1, 0x1c12, 0, buf32, "rxPDO:0");
-            // READ<uint32>(i + 1, 0x1c12, 1, buf32, "rxPDO:1");
-
-            // READ<uint32>(i + 1, 0x1c13, 0, buf32, "txPDO:0");
-            // READ<uint32>(i + 1, 0x1c13, 1, buf32, "txPDO:1");
-
-            READ<uint32>(i + 1, 0x6079, 0, buf32, "DC link circuit voltage", should_print);
-
-            READ<int32>(i + 1, 0x6064, 0, sbuf32, "*position actual value*", should_print);
-            actual_position(i) = (double)(sbuf32) / gear_ratio(i) * (2 * M_PI) / 131072;
-
-            // WRITE<int8>(i + 1, 0x6060, 0, sbuf8, control_mode_int8, "OpMode");
-            // READ<int8>(i + 1, 0x6061, 0, sbuf8, "OpMode display");
-
-            WRITE<uint32>(i + 1, 0x6080, 0, buf32, max_velocity_uint(i), "*Max motor speed*",should_print);
-            // READ<uint32>(i + 1, 0x6080, 0, buf32, "*Max motor speed*");
-
-            WRITE<uint16>(i + 1, 0x6072, 0, buf16, (uint16)(max_torque(i) * torque_multiplier(i)), "*Maximal torque*",should_print); // per thousand of rated torque
-            // READ<uint16>(i + 1, 0x6072, 0, buf16, "*Maximal torque*");                                               // per thousand of rated torque
-
-            //     READ<uint32>(i + 1, 0x6065, 0, buf32, "Position following error window");
-            //     READ<uint16>(i + 1, 0x6066, 0, buf16, "Position following error time out [ms]");
-            //     READ<uint32>(i + 1, 0x6066, 0, buf32, "Position window");
-            //     READ<uint32>(i + 1, 0x6067, 0, buf32, "Position window times [ms]");
+            READ<uint32>(i + 1, 0x60c5, 0, max_motor_acceleration(i), "Max acceleration",false);
+            READ<uint32>(i + 1, 0x60c6, 0, max_motor_deceleration(i), "Max deceleration",false);
+            READ<uint32>(i + 1, 0x6079, 0, dc_link_voltage(i), "DC link circuit voltage", false);
+            READ<int32>(i + 1, 0x6064, 0, sbuf32, "*position actual value*", false);
+            actual_position(i) = (double)(sbuf32) / gear_ratio(i) * (2 * M_PI) / 131072; // 131072 = 2^17
+            // write max motor speed, max torque
+            WRITE<uint32>(i + 1, 0x6080, 0, buf32, max_velocity_uint(i), "*Max motor speed*",false);
+            WRITE<uint16>(i + 1, 0x6072, 0, buf16, (uint16)(max_torque(i)), "*Maximal torque*",false); // per thousand of rated torque
         }
+        if (should_print){
+            // print rated_torque, max_motor_acceleration, max_motor_deceleration, dc_link_voltage, actual_position, max_velocity_uint, max_torque
+            print_eigen_vec(rated_torque, "%.1f ", "rated_torque: ");
+            print_eigen_vec(max_motor_acceleration, "%u ", "max_motor_acceleration: ");
+            print_eigen_vec(max_motor_deceleration, "%u ", "max_motor_deceleration: ");
+            print_eigen_vec(dc_link_voltage, "%u ", "dc_link_voltage: [mV]");
+            print_eigen_vec(actual_position, "%f ", "actual_position: [rad]");
+            print_eigen_vec(max_velocity_uint, "%u ", "max_velocity_uint [rpm]: ");
+            print_eigen_vec(max_torque, "%.0f ", "max_torque [0.1% rated current]: ");
+            printf("\n");
+        }
+
+
+
+        // for (int i = 0; i < ec_slavecount; i++)
+        // {
+        //     // READ<uint32>(i + 1, 0x6075, 0, buf32, "Motor Rated Current [in mA]");
+
+        //     READ<uint32>(i + 1, 0x6076, 0, buf32, "Motor Rated torque [in mA]", should_print); // same as the motor rated current
+        //     rated_torque(i) = ((double)buf32)*1e-3; // 1mA = 1e-3A
+
+        //     // READ<uint32>(i + 1, 0x1c12, 0, buf32, "rxPDO:0");
+        //     // READ<uint32>(i + 1, 0x1c12, 1, buf32, "rxPDO:1");
+
+        //     // READ<uint32>(i + 1, 0x1c13, 0, buf32, "txPDO:0");
+        //     // READ<uint32>(i + 1, 0x1c13, 1, buf32, "txPDO:1");
+
+        //     READ<uint32>(i + 1, 0x60c5, 0, buf32, "Max acceleration",should_print);
+        //     READ<uint32>(i + 1, 0x60c6, 0, buf32, "Max deceleration",should_print);
+
+        //     READ<uint32>(i + 1, 0x6079, 0, buf32, "DC link circuit voltage", should_print);
+
+        //     READ<int32>(i + 1, 0x6064, 0, sbuf32, "*position actual value*", should_print);
+        //     actual_position(i) = (double)(sbuf32) / gear_ratio(i) * (2 * M_PI) / 131072;
+
+        //     // WRITE<int8>(i + 1, 0x6060, 0, sbuf8, control_mode_int8, "OpMode");
+        //     // READ<int8>(i + 1, 0x6061, 0, sbuf8, "OpMode display");
+
+        //     WRITE<uint32>(i + 1, 0x6080, 0, buf32, max_velocity_uint(i), "*Max motor speed*",should_print);
+        //     // READ<uint32>(i + 1, 0x6080, 0, buf32, "*Max motor speed*");
+
+        //     WRITE<uint16>(i + 1, 0x6072, 0, buf16, (uint16)(max_torque(i)), "*Maximal torque*",should_print); // per thousand of rated torque
+
+            
+        //     // READ<uint16>(i + 1, 0x6072, 0, buf16, "*Maximal torque*");                                               // per thousand of rated torque
+
+        //     //     READ<uint32>(i + 1, 0x6065, 0, buf32, "Position following error window");
+        //     //     READ<uint16>(i + 1, 0x6066, 0, buf16, "Position following error time out [ms]");
+        //     //     READ<uint32>(i + 1, 0x6066, 0, buf32, "Position window");
+        //     //     READ<uint32>(i + 1, 0x6067, 0, buf32, "Position window times [ms]");
+        // }
+
+        // HACK: this is for the specific robot only
+        update_dof_position_and_velocity();
+
         /* wait for all slaves to reach SAFE_OP state */
         ec_statecheck(0, EC_STATE_SAFE_OP, EC_TIMEOUTSTATE * 4);
         printf("segments : %d : %d %d %d %d\n", ec_group[0].nsegments, ec_group[0].IOsegment[0], ec_group[0].IOsegment[1], ec_group[0].IOsegment[2], ec_group[0].IOsegment[3]);
@@ -592,8 +723,6 @@ public:
                 //     printf("\n");
                 // }
 
-                int sleep_us = 10000;
-
                 for (int i = 1; i <= ec_slavecount; i++)
                 {
                     CHECKERROR(i);
@@ -604,6 +733,8 @@ public:
 
                 // auto start = std::chrono::high_resolution_clock::now(); // timming code
 
+                t = std::chrono::high_resolution_clock::now(); // timming code
+                
                 // for (i = 1; i <= 10000; i++) // TODO CHANGE
                 while (!should_terminate)
                 {
@@ -637,6 +768,7 @@ public:
 
     void _run_loop()
     {
+        // auto start = std::chrono::high_resolution_clock::now();
         /*
                 Statusword       PDS FSA state
                 ....````....````
@@ -677,20 +809,19 @@ public:
         {
             if (val[i]->status_word != status_word(i))
             {
-                status_word(i) = val[i]->status_word;
-
+                // printf("motor[%d] status_word changed from 0x%-4X to 0x%-4X\n", i, status_word(i), val[i]->status_word);
                 switch (val[i]->status_word & 79)
                 {
                 case 0: // Not ready to switch on
                     /* code */
-                    printf("motor[%d] status_word=0x%-4X Not ready to switch on.\n", i, val[i]->status_word);
+                    printf("motor[%d] status_word changed from 0x%-4X to 0x%-4X [Not ready to switch on].\n", i, status_word(i), val[i]->status_word);
                     break;
                 case 64:                         // Switch on disabled
                     target[i]->control_word = 6; // 0b0110 shut down
-                    printf("motor[%d] status_word=0x%-4X Switch on disabled. sending control_word=0x%-4X\n", i, val[i]->status_word, target[i]->control_word);
+                    printf("motor[%d] status_word changed from 0x%-4X to 0x%-4X [Switch on disabled]. sending control_word=0x%-4X\n", i, status_word(i), val[i]->status_word, target[i]->control_word);
                     break;
                 case 15: // Fault reaction active
-                    printf("motor[%d] status_word=0x%-4X Fault reaction active\n", i, val[i]->status_word);
+                    printf("motor[%d] status_word changed from 0x%-4X to 0x%-4X [Fault reaction active].\n", i, status_word(i), val[i]->status_word);
                     break;
                 case 8: // Fault
                     uint8 buf8; // HACK TODO change back 
@@ -708,11 +839,8 @@ public:
                     int16 buf_int16;
                     READ<int16>(1+i, 0x605A, 0, buf_int16, "Quick stop option code 0x605A");
 
-
                     target[i]->control_word = 128;
-                    printf("motor[%d] status_word=0x%-4X Fault. sending control_word=0x%-4X\n", i, val[i]->status_word, target[i]->control_word);
-                    
-                    
+                    printf("motor[%d] status_word changed from 0x%-4X to 0x%-4X [Fault]. sending control_word=0x%-4X\n", i, status_word(i), val[i]->status_word, target[i]->control_word);
                     // exit(1);
                     break;
 
@@ -723,22 +851,27 @@ public:
                 {
                 case 33:                         // Ready to switch on
                     target[i]->control_word = 7; // 0b0111 switch on
-                    printf("motor[%d] status_word=0x%-4X Ready to switch on. sending control_word=0x%-4X\n", i, val[i]->status_word, target[i]->control_word);
+                    printf("motor[%d] status_word changed from 0x%-4X to 0x%-4X [Ready to switch on]. sending control_word=0x%-4X\n", i, status_word(i), val[i]->status_word, target[i]->control_word);
+                    
                     break;
                 case 35:                          // Switched on
                     target[i]->control_word = 15; // 0b1111 switch_on+enable_operation: switch_on=1, enable_voltage=1, quick_stop=1, enable_operation=1, fault_reset=0,halt=0
-                    printf("motor[%d] status_word=0x%-4X Switched on. sending control_word=0x%-4X\n", i, val[i]->status_word, target[i]->control_word);
+                    printf("motor[%d] status_word changed from 0x%-4X to 0x%-4X [Switched on]. sending control_word=0x%-4X\n", i, status_word(i), val[i]->status_word, target[i]->control_word);
                     break;
                 case 39: // Operation enabled
-                    printf("motor[%d] status_word=0x%-4X Operation enabled\n", i, val[i]->status_word);
+                    if(should_print){
+                        printf("motor[%d] status_word changed from 0x%-4X to 0x%-4X [Operation enabled]\n", i, status_word(i), val[i]->status_word);
+                    }
                     break;
                 case 7: // Quick stop active
-                    printf("motor[%d] status_word=0x%-4X Quick stop active\n", i, val[i]->status_word);
+                    printf("motor[%d] status_word changed from 0x%-4X to 0x%-4X [Quick stop active]\n", i, status_word(i), val[i]->status_word);
                     break;
                 default:
                     break;
                 }
+                
             }
+            status_word(i) = val[i]->status_word;
         }
 
         // // disable_voltage (0) -> shut_down (6) -> 7 (switch_on) -> 15 (switch_on+enable_operation)
@@ -768,10 +901,14 @@ public:
         //     }
         // }
 
+        if(use_position_pd){
+            update_torque_by_pd();
+        }
         for (size_t i = 0; i < NUM_TARGET; i++)
         {
             target[i]->mode_of_operation = control_mode_int8; // TODO check why needs input again..
-            target[i]->max_torque = (uint16)(max_torque(i) * torque_multiplier(i));
+            // target[i]->max_torque = (uint16)(max_torque(i) * torque_multiplier(i));
+            target[i]->max_torque = (uint16)(max_torque(i));
             if (control_mode_int8 == CONTROL_MODE::CYCLIC_SYNC_POSITION) // csp
             {
                 // uint32 buf32;
@@ -792,7 +929,7 @@ public:
                 target[i]->torque_offset = torque_offset_int16(i);
             }
             else if (control_mode_int8 == CONTROL_MODE::CYCLIC_SYNC_TORQUE) // csv
-            {
+            {   
                 // target[i]->target_position = 0;
                 // target[i]->target_velocity = 0;
                 target[i]->target_torque = target_torque_int16(i);
@@ -805,15 +942,27 @@ public:
         // printf("Processdata cycle %4d, WKC %d,EWKC %d", i, wkc,expectedWKC);
         // printf("\nWKC %d,EWKC %d", wkc, expectedWKC);
         if (wkc >= expectedWKC)
-        {
+        {   
+            auto t_now = std::chrono::high_resolution_clock::now();
+            dt_measured = std::chrono::duration<double, std::milli>(t_now - t).count()/1000;
+            t = t_now;
+
             for (int i = 0; i < NUM_TARGET; i++)
-            {
+            {   
+                // double pos = (double)(val[i]->position_actual) / gear_ratio(i) * (2 * M_PI) / 131072;
+                // actual_velocity_measured(i) = (pos-actual_position(i))/dt_measured;
+                // actual_position(i) = pos;
                 actual_position(i) = (double)(val[i]->position_actual) / gear_ratio(i) * (2 * M_PI) / 131072;
                 actual_position_error(i) = (double)(val[i]->position_follow_err) / gear_ratio(i) * (2 * M_PI) / 131072;
                 actual_velocity(i) = (double)(val[i]->velocity_actual) / gear_ratio(i) * (2 * M_PI) / 131072;
+                actual_velocity_filtered(i) = filter_for_actual_velocity[i].filter(actual_velocity(i));
                 actual_torque_raw(i) = (double)(val[i]->torque_actual);
             }
-            actual_torque = actual_torque_raw.cwiseProduct(rated_torque) * 1e-3;
+            actual_torque = actual_torque_raw.cwiseQuotient(rated_torque) * 1e3;
+
+            if(use_position_pd){
+            update_dof_position_and_velocity();
+            }
 
             // if (debug)
             // {
@@ -946,12 +1095,32 @@ public:
             // }
 
             needlf = TRUE;
+                // printf("\n");
+
+                // printf("target[i]->velocity_offset: ");
+                // for (size_t i = 0; i < NUM_TARGET; i++)
+                // {
+                //     printf("%d ", target[i]->velocity_offset);
+                // }
+                // printf("\n");
+
+                // prin
         }
         /* The cycle times in CSP mode with 2^n * 125 µs (for n =1 to 8) are:
            250 µs, 500 µs, 1 ms, 2 ms, 4 ms, 8 ms, 16 ms or 32 ms.
            in reality, the motor only accept < 1600 us
         */
-        osal_usleep(1000); // 1ms
+        // osal_usleep(1000);
+        osal_usleep(sleep_us);
+        // auto end = std::chrono::high_resolution_clock::now();
+        // const std::chrono::duration<double, std::micro> diff = end - start;
+        // uint32 adjusted_diff = (uint32)(1000.0 - diff.count());
+        // if (adjusted_diff > 0){
+        //     osal_usleep(adjusted_diff);
+        // }
+        // else{
+        //     printf("code execution was longer than 500 us. diff = %f us\n", diff.count());
+        // }
     }
 
     void ecatcheck(void *ptr)

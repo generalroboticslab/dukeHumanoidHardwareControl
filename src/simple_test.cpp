@@ -93,7 +93,7 @@ int main(int argc, char *argv[])
       std::string modeStr = argv[2];
       Eigen::VectorXd target_input = parse_doubles(argv[3]);
 
-      double target = atof(argv[3]);
+      // double target = atof(argv[3]);
       double max_velocity = atof(argv[4]);
       double max_torque = atof(argv[5]);
 
@@ -112,7 +112,7 @@ int main(int argc, char *argv[])
       else if (modeStr == "cst")
       {
          control_mode = CONTROL_MODE::CYCLIC_SYNC_TORQUE;
-         double target_torque_raw = atof(argv[3]);
+         // double target_torque_raw = atof(argv[3]);
          printf("Control mode: cst\n");
          printf("Target torque: [%%rated torue]");
       }

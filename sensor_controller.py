@@ -1,13 +1,3 @@
-# Author: Michael Scutari
-# Description: This script reads Serial data and decodes it using COBS and CRC8. For IMU and load cells.
-# © 2024 General Robotics Lab, Thomas Lord Department of Mechanical Engineering, Duke University
-# License: MIT License
-
-# Author: Michael Scutari
-# Description: This script reads Serial data and decodes it using COBS and CRC8. For IMU and load cells.
-# © 2024 General Robotics Lab, Thomas Lord Department of Mechanical Engineering, Duke University
-# License: MIT License
-
 import serial  # conda install -c conda-forge pyserial
 from cobs import cobs  # pip install cobs
 import crc8
@@ -17,30 +7,112 @@ from multiprocessing import Process, Queue
 from queue import Empty
 from scipy.spatial.transform import Rotation as R
 import numpy as np
+from serial.tools import list_ports
+from numpy_ringbuffer import RingArrayBuffer,filterBuffer
+
+
+def quaternion_to_rotation_matrix(q):
+  """Converts a quaternion to a rotation matrix.
+
+  Args:
+    q: A numpy array representing a quaternion in the format [x, y, z, w].
+
+  Returns:
+    A 3x3 numpy array representing the rotation matrix.
+  """
+
+  x, y, z, w = q
+
+  R = np.array([
+    [1 - 2*y**2 - 2*z**2, 2*x*y - 2*z*w, 2*x*z + 2*y*w],
+    [2*x*y + 2*z*w, 1 - 2*x**2 - 2*z**2, 2*y*z - 2*x*w],
+    [2*x*z - 2*y*w, 2*y*z + 2*x*w, 1 - 2*x**2 - 2*y**2]
+  ])
+
+  return R
+
 
 class SerialDataCollector:
-    def __init__(self, port, baudrate, queue, max_queue_size=1):
-        self.ser = serial.Serial(port, baudrate)
-        self.ser.set_low_latency_mode(True)
-        self.sample_count = 0
-        self.start_time = time.time()
+
+    # Bit masks for fresh data
+    FRESH_LOAD_CELL_0 = 0x0001
+    FRESH_LOAD_CELL_1 = 0x0002
+    FRESH_LOAD_CELL_2 = 0x0004
+    FRESH_LOAD_CELL_3 = 0x0008
+    FRESH_LOAD_CELL_ALL = 0x000F
+    FRESH_FILTER_STATUS = 0x0010
+    FRESH_LINEAR_ACCEL = 0x0020
+    FRESH_QUATERNION = 0x0040
+    FRESH_ROTATION_MATRIX = 0x0080
+    FRESH_GRAVITY_VECTOR = 0x0100
+    FRESH_GYRO = 0x0200
+    FRESH_ACCEL = 0x0400
+
+    def __init__(self, baudrate, queue, max_queue_size=1):
+        self.ser = None
+        self.baudrate = baudrate
+        # Hexadecimal VendorID=0x16c0 & ProductID=0x483
+        self.vendor_id = 0x16c0
+        self.product_id = 0x483
+        self.sample_timestamps = RingArrayBuffer(buffer_len=100, shape=1,dtype=np.float64)  # List to store sample timestamps
+        self.sample_timestamps.storage[:] = time.time()
+        
         self.unpacked = None
         self.running = False
         self.queue = queue
         self.max_queue_size = max_queue_size
 
+        self.filter_for_ang_vel = filterBuffer(shape=3,fs=500, filter_order=4,cut_off_frequency=20,dtype=np.float64)
+        self.filter_for_lin_acc = filterBuffer(shape=3,fs=500, filter_order=4,cut_off_frequency=20,dtype=np.float64)
+
+        self.filter_force_measurement = filterBuffer(shape=4,fs=200, filter_order=4,cut_off_frequency=20,dtype=np.float64)
+
         # Initialize data variables
-        self.forceSensorData = [0, 0, 0, 0]
-        self.accelData = [0, 0, 0]
-        self.gyroData = [0, 0, 0]
-        self.gravityVector = [0, 0, 0]
-        self.quaternionData = [0, 0, 0, 1]
-        self.rotationMatrix = [0, 0, 0, 0, 0, 0, 0, 0, 0]
-        self.linearAccel = [0, 0, 0]
+
+        self.ang_vel =  np.zeros(3,dtype=np.float64)
+        self.lin_acc =  np.zeros(3,dtype=np.float64)
+
+        self.force_measurement_raw = np.zeros(4,dtype=np.int32)
+        self.force_measurement = np.zeros(4,dtype=np.int32) # filtered
+
+        self.lin_acc_raw = np.zeros(3,dtype=np.float64)
+
+        self.ang_vel_raw =  np.zeros(3,dtype=np.float64)
+
+        self.gravity_vec =  np.zeros(3,dtype=np.float64)
+        self.base_quat = np.array([0, 0, 0, 1],dtype=np.float64)
+        self.rotationMatrix = np.zeros(9,dtype=np.float64)
+        self.ang_vel_raw = np.zeros(3,dtype=np.float64)
+        
+        self.lin_acc_imu_filtered = np.zeros(3,dtype=np.float64)
+        self.ang_vel_imu_filtered = np.zeros(3,dtype=np.float64)
+        
+        self.contact = np.zeros(2,dtype=bool)
         self.filterStatus = 0
         self.filterDynamicsMode = 0
         self.filterStatusFlags = 0
         self.fresh = 0
+
+    def find_port(self):
+        ports = list_ports.comports()
+        for port in ports:
+            if port.vid == self.vendor_id and port.pid == self.product_id:
+                return port.device
+        raise serial.SerialException("Teensy not connected!")
+
+    def connect(self):
+        self.ser = None
+        port = self.find_port()
+        if port:
+            try:
+                self.ser = serial.Serial(port, self.baudrate, timeout=1)
+                self.ser.set_low_latency_mode(True)
+                print(f"Connected to {port}")
+            except serial.SerialException as e:
+                print(f"Failed to connect to {port}: {e}")
+        else:
+            print("No suitable port found!")
+
 
     def start(self):
         self.running = True
@@ -56,9 +128,23 @@ class SerialDataCollector:
             self.read()
 
     def read(self):
+        # # see if there is a connection and retry to connect if not
+        if not self.ser:
+            self.connect()
+            if not self.ser:
+                time.sleep(0.1)
+                self.queue.put(None)
+                return
+            
         received_data = bytearray()
         while True:
-            byte = self.ser.read(1)  # Read a single byte
+            try:
+                byte = self.ser.read(1)  # Read a single byte
+            except serial.SerialException as e:
+                self.connect()
+                self.queue.put(None)
+                return
+            
             if byte == b'\x00':  # Check if it's the null byte
                 break
             received_data += byte
@@ -66,34 +152,51 @@ class SerialDataCollector:
         try:
             decoded = cobs.decode(received_data)
         except cobs.DecodeError:
-            print("COBS decoding failed")
-            return
-
-        hash = crc8.crc8()
-        hash.update(decoded[1:-1])
-
-        if decoded[-1].to_bytes(1, byteorder='little') != hash.digest():
-            print("CRC mismatch")
+            # print("bad COBS") 
+            # self.queue.put(None)
+            # print("CRC mismatch")
             return
 
         try:
-            self.unpacked = struct.unpack("@hhhhfffffffffffffffffffffffffhhhh", decoded[1:-1])
-            self.sample_count += 1
+            # self.unpacked = struct.unpack("@hhhhffffffffffffffffffffffffffffhhhh", decoded[1:-1])
+            self.unpacked = struct.unpack("@hhhhfffffffffffffffffffhhhh", decoded[1:-1]) # no rotation matrix
+            self.sample_timestamps.add(time.time())  # Add timestamp for the new sample
+
             # x is forward, y is left, z is up
             # in the imu coordinate x is forward, y is right, z is down
             # so have to negate y and z
             # Update data variables
-            self.forceSensorData = [self.unpacked[3], self.unpacked[2], self.unpacked[0], self.unpacked[1]] # 0 is left-back, 1 left-front, 2 right-back, 3 right-front
-            self.accelData = [-self.unpacked[4], self.unpacked[5], self.unpacked[6]] # negate x
-            self.gyroData = [self.unpacked[7], -self.unpacked[8], -self.unpacked[9]] # negate y and z
-            self.gravityVector = [-self.unpacked[10]/9.81, self.unpacked[11]/9.81, self.unpacked[12]/9.81] # gravity vector negate x
-            self.rotationMatrix = [self.unpacked[13], self.unpacked[14], self.unpacked[15], self.unpacked[16], self.unpacked[17], self.unpacked[18], self.unpacked[19], self.unpacked[20], self.unpacked[21]]
-            self.quaternionData = [self.unpacked[23], -self.unpacked[24], -self.unpacked[25], self.unpacked[22]] # quaternion reordered to xyzw and axes y and z reversed
-            self.linearAccel = [self.unpacked[26], -self.unpacked[27], -self.unpacked[28]] # negative y and z
-            self.filterStatus = self.unpacked[29]
-            self.filterDynamicsMode = self.unpacked[30]
-            self.filterStatusFlags = self.unpacked[31]
-            self.fresh = [self.unpacked[32]]
+
+            
+            # self.force_measurement[:] = ((self.unpacked[3], self.unpacked[2], self.unpacked[0], self.unpacked[1])) # 0 is left-back, 1 left-front, 2 right-back, 3 right-front
+            
+            self.fresh = self.unpacked[26] # [35]
+
+            force_measurement_fresh = bool(self.fresh & self.FRESH_LOAD_CELL_ALL)
+            if force_measurement_fresh:
+                self.force_measurement_raw[:] = self.unpacked[0:4] # 0 is left-back, 1 left-front, 2 right-back, 3 right-front
+                self.force_measurement[:] = self.filter_force_measurement.add(self.force_measurement_raw)
+                self.contact[:] = (self.force_measurement[0] + self.force_measurement[1])>2850, (self.force_measurement[2] + self.force_measurement[3])>2850
+            # print(force_measurement_fresh)
+            
+            self.lin_acc_raw[:] = self.unpacked[4:7]
+            self.ang_vel_raw[:] = self.unpacked[7:10]
+            self.gravity_vec[:] = self.unpacked[10:13]
+            # self.rotationMatrix[:] = self.unpacked[13:22]
+            # 4
+            self.base_quat[:] = self.unpacked[13:17] # [22:26]
+            self.lin_acc_imu_filtered[:] = self.unpacked[17:20] # [26:29]
+            self.ang_vel_imu_filtered[:] = self.unpacked[20:23] #[29:32]
+            self.filterStatus = self.unpacked[23] #[32]
+            self.filterDynamicsMode = self.unpacked[24] #[33]
+            self.filterStatusFlags = self.unpacked[25] #[34]
+            self.sps = 100/(self.sample_timestamps[0][0] - self.sample_timestamps[-1][0]) # sample per second
+            
+            # # filtered data
+            self.ang_vel[:] = self.filter_for_ang_vel.add(self.ang_vel_imu_filtered)
+            self.lin_acc[:] = self.filter_for_lin_acc.add(self.lin_acc_imu_filtered)
+            
+            # self.rot_from_quat = quaternion_to_rotation_matrix(self.base_quat)
 
             # Send data to the main process
             latest_data = self.get_latest_data()
@@ -109,34 +212,50 @@ class SerialDataCollector:
 
     def get_latest_data(self):
         return {
-            'forceSensorData': self.forceSensorData,
-            'accelData': self.accelData,
-            'gyroData': self.gyroData,
-            'quaternionData': self.quaternionData,
-            'rotationMatrix': self.rotationMatrix,
-            'gravityVector': self.gravityVector,
-            'filterStatus': self.filterStatus,
-            'linearAccel': self.linearAccel,
-            'filterDynamicsMode': self.filterDynamicsMode,
-            'filterStatusFlags': self.filterStatusFlags,
-            'fresh': self.fresh,
-            'timestamp': time.time(),
-            'sps': self.get_samples_per_second()
+            'force_measurement': self.force_measurement_raw,
+            'lin_acc': self.lin_acc,
+            'contact': self.contact,
+            # 'lin_acc_raw': self.lin_acc_raw,
+            # 'lin_acc_filtered': self.lin_acc_imu_filtered,
+            'ang_vel': self.ang_vel,
+            # 'ang_vel_raw': self.ang_vel_raw, #self.gyroData_filtered, # self.gyroData,
+            # 'ang_vel_filtered': self.ang_vel_imu_filtered,
+            'base_quat': self.base_quat,
+            # 'rot': self.rotationMatrix,
+            # 'rot_form_quat': self.rot_from_quat.ravel(),
+            # 'rot_debug': self.rotationMatrix.ravel()/self.rot_from_quat.ravel(),
+            # 'rotationMatrix': self.rotationMatrix,
+            'gravity_vec': self.gravity_vec,
+            # 'debug': np.linalg.norm(self.base_quat),
+            # 'filterStatus': self.filterStatus,
+            # 'filterDynamicsMode': self.filterDynamicsMode,
+            # 'filterStatusFlags': self.filterStatusFlags,
+            # 'fresh': self.interpret_fresh_bytes(self.fresh),
+            # 'timestamp': self.sample_timestamps[0],
+            'sps': self.sps
         }
-
-    def get_samples_per_second(self):
-        elapsed_time = time.time() - self.start_time
-        if elapsed_time > 0:
-            return self.sample_count / elapsed_time
-        else:
-            return 0
-
+    
+    def interpret_fresh_bytes(self):
+        fresh_dict = {
+            'forceSensorData_0': bool(self.fresh & self.FRESH_LOAD_CELL_0),
+            'forceSensorData_1': bool(self.fresh & self.FRESH_LOAD_CELL_1),
+            'forceSensorData_2': bool(self.fresh & self.FRESH_LOAD_CELL_2),
+            'forceSensorData_3': bool(self.fresh & self.FRESH_LOAD_CELL_3),
+            'filterStatus': bool(self.fresh & self.FRESH_FILTER_STATUS),
+            'linearAccel': bool(self.fresh & self.FRESH_LINEAR_ACCEL),
+            'quaternionData': bool(self.fresh & self.FRESH_QUATERNION),
+            # 'rotationMatrix': bool(self.fresh & self.FRESH_ROTATION_MATRIX),
+            'gravityVector': bool(self.fresh & self.FRESH_GRAVITY_VECTOR),
+            'gyroData': bool(self.fresh & self.FRESH_GYRO),
+            'accelData': bool(self.fresh & self.FRESH_ACCEL),
+        }
+        return fresh_dict
 
 
 class SensorController:
-    def __init__(self, port="/dev/cu.usbmodem154158101", baudrate=921600):
+    def __init__(self, baudrate=1500000):
         self.queue = Queue(maxsize=1)
-        self.data_collector = SerialDataCollector(port, baudrate, self.queue)
+        self.data_collector = SerialDataCollector(baudrate, self.queue)
 
     def start(self):
         self.data_collector.start()
@@ -149,55 +268,40 @@ class SensorController:
 
     def get_latest_data(self):
         try:
-            return self.queue.get()
+            return self.queue.get(timeout=0.05)
         except Empty:
+            print("No data received!")
             return None
         
-        
-        
-
-def initialize_serial_comm() -> SensorController:
-    # Initialize serial communication for sensor data
-    for (
-        port
-    ) in ["/dev/ttyACM0", "/dev/ttyACM1", "/dev/ttyACM2"]:  # try to connect to sensors on every possible port
-        try:
-            sensors = SensorController(port, baudrate="921600")
-            sensors.start()
-            print(f"Sensors connected to {port}")
-            return sensors  # Return sucessful connection
-        except Exception as e:
-            print(f"Sensors failed to connect to {port}: {e}")
-
-    raise (
-        ConnectionError(
-            "Failed to connect sensors to any port. Check USB is plugged in!"
-        )
-    )
-    
 if __name__ == "__main__":
+    
+    from publisher import DataPublisher
+    
+    publisher = DataPublisher('udp://localhost:9870',encoding="msgpack",broadcast=False)
+    
+    # Initialize the SensorController instance
+    sensors = SensorController()
 
+    # Start the collection process
+    sensors.start()
 
-    # Initialize the SerialCommunication instance with the provided port
-    ser_comm = SensorController(port="/dev/ttyACM0", baudrate=921600)
-
-    # Start the data collection
-    ser_comm.start()
-
-    target_fps = 50
+    target_fps = 500
     frame_time = 1 / target_fps
 
     try:
-    
         while True:
             start_time = time.time()
-            
-            latest_data = ser_comm.get_latest_data()
+            latest_data = sensors.get_latest_data()
             if latest_data:
-                print(f"{latest_data['sps']:.2f}")
+                # print(f"{latest_data['sps']:.2f}")
                 # print(latest_data['sps'])
+                # print(latest_data['gyroData'])
+                # print(latest_data['contact'],latest_data['force_measurement'])
+
+                publisher.publish({"sensors":latest_data})
+                pass
             else:
-                print(latest_data)
+                print("No data received!")
             
             elapsed_time = time.time() - start_time
             sleep_time = frame_time - elapsed_time
@@ -205,19 +309,7 @@ if __name__ == "__main__":
             if sleep_time > 0:
                 time.sleep(sleep_time)
 
-#     # Continuously print out the unpacked data
-#     while True:
-#         latest_data = ser_comm.get_latest_data()
-#         if latest_data:
-
-#             print(f"{latest_data['sps']:.2f}")
-#             # print(latest_data['sps'])
-
-
-#         #Sleep for a short duration to avoid flooding the output
-#         time.sleep(0.5)
     except KeyboardInterrupt:
         # Stop the data collection gracefully on interrupt
-        ser_comm.stop()
+        sensors.stop()
         print("Data collection stopped.")
-            

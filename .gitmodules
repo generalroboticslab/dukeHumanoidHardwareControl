@@ -1,3 +1,6 @@
 [submodule "SOEM"]
-	path = SOEM
+	path = ext/SOEM
 	url = https://github.com/OpenEtherCATsociety/SOEM.git
+[submodule "ext/nanobind"]
+	path = ext/nanobind
+	url = https://github.com/wjakob/nanobind
