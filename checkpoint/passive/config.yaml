@@ -1,0 +1,430 @@
+capture_video: false
+capture_video_freq: 1464
+capture_video_len: 100
+checkpoint: /home/grl/repo/RobotsMakingRobots/legged_env/outputs/Biped/train/bd5_00_00_passive/runs/BipedAsymm_16-17-28-30/nn/BipedAsymm.pth
+experiment: ''
+force_render: true
+graphics_device_id: 0
+headless: false
+max_iterations: ''
+multi_gpu: false
+num_envs: 1
+num_subscenes: 4
+num_threads: 10
+pbt:
+  enabled: false
+physics_engine: physx
+pipeline: gpu
+rl_device: cuda:0
+seed: 42
+sigma: ''
+sim_device: cuda:0
+solver_type: 1
+task:
+  env:
+    assetDofProperties:
+      armature: [0.21, 0.42, 0.38, 0.21, 0.075, 0.21, 0.42, 0.38, 0.21, 0.075]
+      damping: 0
+      friction: [0.01, 0.01, 0.01, 0.04, 0.04, 0.01, 0.01, 0.01, 0.04, 0.04]
+      velocity: 10
+    asymmetric_observations: true
+    baseHeightOffset: 0.08
+    baseHeightTarget: null
+    baseHeightTargetOffset: 0
+    baseInitState:
+      pos: [0.0, 0.0, 0.4]
+      rot: [0.0, 0.0, 0.0, 1.0]
+      vAngular: [0.0, 0.0, 0.0]
+      vLinear: [0.0, 0.0, 0.0]
+    commandZeroProbability: 0.1
+    commandZeroThreshold: 0.05
+    control:
+      actionScale: 1.0
+      damping: [8, 8, 8, 8, 5, 8, 8, 8, 8, 5]
+      decimation: 4
+      limit: 60
+      stiffness: [80, 80, 80, 80, 60, 80, 80, 80, 80, 60]
+    dataPublisher:
+      enable: true
+      target_url: udp://localhost:9870
+    data_root_label: sim
+    defaultJointPositions: [0.0, 0.175, 0.1, 0.387, -0.213, 0.0, -0.175, -0.1, -0.387,
+      0.213]
+    enableCameraSensors: false
+    enableDebugVis: false
+    envSpacing: 1.0
+    heightmap:
+      x: '${linspace: -0.6, 0.6, 13}'
+      y: '${linspace: -0.4, 0.4, 9}'
+    keep_still_at_zero_command: false
+    learn:
+      action_is_on_min: 0
+      action_is_on_sigmoid_k: 10
+      addNoise: false
+      allowKneeContacts: false
+      angularVelocityNoise: 0.2
+      angularVelocityScale: 0.25
+      dofLimitMargins: 0
+      dofPositionNoise: 0.01
+      dofPositionScale: 1.0
+      dofVelocityNoise: 1.5
+      dofVelocityScale: 0.05
+      enablePassiveDynamics: true
+      episodeLength_s: 999
+      foot_contact_threshold: 20
+      gravityNoise: 0.05
+      guided_contact:
+        enable: true
+        phase_freq: 1.25
+        phase_offset: [0, 0.5]
+        phase_stance_ratio: 0.6
+        phase_start_with_swing: true
+      heightMapNoise: 0.06
+      heightMapScale: 5.0
+      linearVelocityNoise: 0.1
+      linearVelocityScale: 2.0
+      noiseLevel: 1.0
+      passiveCurriculum: true
+      reward:
+        action:
+          fcn: abs
+          scale: 0
+        action_rate:
+          exp_scale: -0.001
+          fcn: square_sum
+          scale: 0
+        air_time:
+          fcn: duration_since_condition_reward
+          offset: -0.3
+          scale: 1
+        ang_vel:
+          exp_scale: -8.0
+          fcn: exp_weighted_square_sum
+          normalize_by: [0.1, 0.1, 1]
+          scale: 0.5
+        base_height:
+          exp_scale: -2000
+          fcn: null
+          scale: 0.1
+        collision:
+          fcn: sum
+          scale: 0
+        contact_force:
+          fcn: contact_force_reward
+          offset: -100
+          scale: 0
+        dof_acc:
+          exp_scale: -0.0001
+          fcn: exp_square_sum
+          scale: 0.1
+        dof_force_target:
+          exp_scale: -1
+          fcn: exp_square_sum
+          scale: 0.05
+        dof_force_target_swing:
+          exp_scale: -1.0
+          fcn: exp_square_sum
+          scale: 0
+        dof_jerk:
+          exp_scale: -1.0e-06
+          fcn: exp_square_sum
+          scale: 0
+        dof_limit:
+          fcn: out_of_bound_square_sum
+          margin: 0.1
+          scale: -100.0
+        dof_pos:
+          fcn: abs_sum
+          scale: -0.05
+        dof_pow:
+          fcn: abs_sum
+          scale: 0
+        dof_vel:
+          fcn: square_sum
+          scale: 0
+        foot_forward:
+          exp_scale: -10
+          fcn: foot_forward_fcn
+          scale: 0.1
+        foot_height:
+          clamp_max: 0.05
+          fcn: foot_height_reward
+          scale: 1.0
+        foot_orientation:
+          exp_scale: -8
+          fcn: exp_square_sum_mean
+          scale: 0.1
+        foot_pos:
+          exp_scale: -1000
+          normalize_by: [1, 1, 0]
+          scale: 0.1
+        impact:
+          fcn: abs_sum
+          scale: 0
+        lin_vel:
+          exp_scale: -4.0
+          fcn: exp_weighted_square_sum
+          normalize_by: [1, 1, 0.1]
+          scale: 1.0
+        orientation:
+          fcn: square_sum
+          scale: -20
+        passive_action:
+          scale: 0.005
+        passive_action_rate:
+          scale: 0
+        should_contact:
+          fcn: sum
+          scale: 0.5
+        single_contact:
+          fcn: duration_within_period_reward
+          grace_period: 0.2
+          max_single_contact: 1
+          scale: 0
+        slip:
+          fcn: slip_reward
+          scale: 0
+        stance_time:
+          fcn: duration_since_condition_reward
+          offset: -0.5
+          scale: 0
+        stumble:
+          fcn: sum
+          scale: 0
+      terminalReward: 0.0
+    max_observation_delay_steps: 1
+    numActions: infer
+    numEnvs: ${resolve_default:4096,${...num_envs}}
+    numObservations: infer
+    num_stacked_obs_frame: 5
+    num_stacked_state_frame: 3
+    observationNames: [angularVelocity, projected_gravity_filtered, commands, dofPosition, dofVelocity,
+      actions, contactTarget, phase]
+    randomCommandVelocityRanges:
+      linear_x: [0, 1]
+      linear_y: [0, 0]
+      yaw: [0, 0]
+    randomize:
+      action_delay:
+        enable: true
+        range: [0.1, 0.5]
+      baseInertiaOrigin:
+        enable: false
+        range: [[-0.02, 0.02], [-0.02, 0.02], [-0.02, 0.02]]
+      baseMass:
+        enable: false
+        range: [-0.5, 5.0]
+      body_force:
+        decay_time_constant: 0.2
+        enable: false
+        prob_range: [0.001, 0.1]
+        scale: 0.05
+      default_dof_pos:
+        enable: false
+        range: [-0.02, 0.02]
+      dof_strength:
+        enable: false
+        range: [0.95, 1.02]
+      erfi:
+        enable: false
+        rao_range: [-2.0, 2.0]
+        rfi_range: [-3.0, 3.0]
+      friction:
+        enable: false
+        range: [0.2, 1.2]
+      initDofPos:
+        enable: false
+        range: [-0.1, 0.1]
+      initDofVel:
+        enable: false
+        range: [-0.1, 0.1]
+      link_inertia:
+        enable: false
+        range: [0.95, 1.05]
+      link_mass:
+        enable: false
+        range: [0.95, 1.05]
+      projected_gravity_delay:
+        enable: true
+        range: [0.1, 0.8]
+      push:
+        enable: false
+        interval_s: 8
+        velMax: [0.2, 0.2, 0.2, 0.4, 0.4, 0.4]
+        velMin: [-0.2, -0.2, -0.2, -0.4, -0.4, -0.4]
+    renderFPS: 50
+    stateNames: [linearVelocity, angularVelocity, projectedGravity, commands, dofPosition,
+      dofVelocity, actions, contactTarget, contact, phase]
+    terrain:
+      borderSize: 25
+      curriculum: true
+      difficultySale: 0.2
+      discrete:
+        height: 0.15
+        num_rects: 40
+        size: [0.4, 2.0]
+      dynamicFriction: 1.0
+      horizontalScale: 0.1
+      mapLength: 10.0
+      mapWidth: 10.0
+      maxInitMapLevel: 1
+      numLevels: 2
+      numTerrains: 10
+      platformSize: 2.4
+      restitution: 0.0
+      slope: 0.4
+      slopeTreshold: 0.2
+      stair:
+        height: 0.15
+        width: 0.31
+      staticFriction: 1.0
+      terrainProportions: [1, 1, 0, 1, 1, 0, 0, 1, 0]
+      terrainType: plane
+      uniform:
+        downsampled_scale: 0.2
+        height: 0.15
+        step: 0.005
+      verticalScale: 0.001
+    urdfAsset:
+      AssetOptions:
+        collapse_fixed_joints: true
+        default_dof_drive_mode: 3
+        fix_base_link: false
+        flip_visual_attachments: false
+        override_inertia: false
+        replace_cylinder_with_capsule: true
+        vhacd_enabled: true
+        vhacd_params:
+          max_convex_hulls: 3
+          max_num_vertices_per_ch: 128
+      collision_filter: 0
+      file: urdf/v6biped_urdf_v4_aug29/v6biped_urdf_v4_squarefoot_aug29.urdf
+      footName: foot
+    viewer:
+      follow: true
+      keyboardOperator: true
+      lookat: [1.0, 1, 9]
+      pos: [0, 0, 10]
+      refEnv: 0
+      sync: true
+  name: Biped
+  physics_engine: physx
+  sim:
+    dt: 0.005
+    gravity: [0.0, 0.0, -9.81]
+    physx:
+      bounce_threshold_velocity: 0.2
+      contact_collection: 1
+      contact_offset: 0.01
+      default_buffer_size_multiplier: 5.0
+      max_depenetration_velocity: 100.0
+      max_gpu_contact_pairs: 8388608
+      num_position_iterations: 4
+      num_subscenes: ${....num_subscenes}
+      num_threads: ${....num_threads}
+      num_velocity_iterations: 1
+      rest_offset: 0.0
+      solver_type: ${....solver_type}
+      use_gpu: ${contains:"cuda",${....sim_device}}
+    substeps: 1
+    up_axis: z
+    use_gpu_pipeline: ${eq:${...pipeline},"gpu"}
+  test: ${..test}
+task_name: ${task.name}
+test: export
+torch_deterministic: false
+train:
+  params:
+    algo:
+      name: a2c_continuous
+    config:
+      bounds_loss_coef: 0.0
+      central_value_config:
+        clip_value: true
+        kl_threshold: ${..kl_threshold}
+        learning_rate: ${..learning_rate}
+        lr_schedule: ${..lr_schedule}
+        mini_epochs: ${..mini_epochs}
+        minibatch_size: ${..minibatch_size}
+        network:
+          central_value: true
+          mlp:
+            activation: elu
+            d2rl: false
+            initializer:
+              name: default
+            regularizer:
+              name: None
+            units: [512, 256, 128]
+          name: actor_critic
+        normalize_input: true
+        schedule_type: standard
+        truncate_grads: ${..truncate_grads}
+      clip_actions: false
+      clip_value: true
+      critic_coef: 2
+      e_clip: 0.2
+      entropy_coef: 0.001
+      env_name: rlgpu
+      full_experiment_name: ${.name}
+      gamma: 0.99
+      grad_norm: 1.0
+      horizon_length: 32
+      kl_threshold: 0.008
+      learning_rate: 0.0003
+      lr_schedule: adaptive
+      max_epochs: 3000
+      mini_epochs: 8
+      minibatch_size: 16384
+      mixed_precision: true
+      name: ${resolve_default:BipedAsymm,${....experiment}}
+      normalize_advantage: true
+      normalize_input: true
+      normalize_value: true
+      num_actors: ${....task.env.numEnvs}
+      player:
+        games_num: 100000
+      ppo: true
+      print_stats: true
+      reward_shaper:
+        scale_value: 1.0
+      save_best_after: 200
+      save_frequency: 50
+      score_to_win: 20000
+      seq_length: 4
+      tau: 0.95
+      truncate_grads: true
+      value_bootstrap: true
+    load_checkpoint: ${if:${...checkpoint},True,False}
+    load_path: ${...checkpoint}
+    model:
+      name: continuous_a2c_logstd
+    network:
+      mlp:
+        activation: elu
+        d2rl: false
+        initializer:
+          name: default
+        regularizer:
+          name: None
+        units: [512, 256, 128]
+      name: actor_critic
+      separate: false
+      space:
+        continuous:
+          fixed_sigma: true
+          mu_activation: None
+          mu_init:
+            name: default
+          sigma_activation: None
+          sigma_init:
+            name: const_initializer
+            val: 0.0
+    seed: ${...seed}
+wandb_activate: false
+wandb_entity: ''
+wandb_group: ''
+wandb_logcode_dir: ''
+wandb_name: ${train.params.config.name}
+wandb_project: isaacgymenvs
+wandb_tags: []

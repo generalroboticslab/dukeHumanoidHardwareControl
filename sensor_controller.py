@@ -66,14 +66,13 @@ class SerialDataCollector:
         self.filter_for_lin_acc = filterBuffer(shape=3,fs=500, filter_order=4,cut_off_frequency=20,dtype=np.float64)
 
         self.filter_force_measurement = filterBuffer(shape=4,fs=200, filter_order=4,cut_off_frequency=20,dtype=np.float64)
+        # self.filter_force_measurement.buf_filt.storage[:]=2000
+        # self.filter_force_measurement.buf_raw.storage[:]=2000
 
         # Initialize data variables
 
         self.ang_vel =  np.zeros(3,dtype=np.float64)
         self.lin_acc =  np.zeros(3,dtype=np.float64)
-
-        self.force_measurement_raw = np.zeros(4,dtype=np.int32)
-        self.force_measurement = np.zeros(4,dtype=np.int32) # filtered
 
         self.lin_acc_raw = np.zeros(3,dtype=np.float64)
 
@@ -87,7 +86,20 @@ class SerialDataCollector:
         self.lin_acc_imu_filtered = np.zeros(3,dtype=np.float64)
         self.ang_vel_imu_filtered = np.zeros(3,dtype=np.float64)
         
+        self.force_measurement_raw = np.zeros(4,dtype=np.int32)
+        self.force_measurement = np.zeros(4,dtype=np.int32) # filtered
+        self.force_measurement_min = np.ones(4,dtype=np.int32)*5000
+
+        #  NOTE: MUST match the actual values of the force sensor at zero contact
+        self.force_measurement_min = np.array([730,1020,1000,780])
+        # self.force_measurement_raw_buf = RingArrayBuffer(buffer_len=20,shape=(4,),dtype=int)
+        self.force_measurement_threshold = 400
+
         self.contact = np.zeros(2,dtype=bool)
+        self.last_contact = np.zeros_like(self.contact)
+        self.contact_filt = np.zeros_like(self.contact)
+        
+
         self.filterStatus = 0
         self.filterDynamicsMode = 0
         self.filterStatusFlags = 0
@@ -132,7 +144,6 @@ class SerialDataCollector:
         if not self.ser:
             self.connect()
             if not self.ser:
-                time.sleep(0.1)
                 self.queue.put(None)
                 return
             
@@ -152,7 +163,7 @@ class SerialDataCollector:
         try:
             decoded = cobs.decode(received_data)
         except cobs.DecodeError:
-            # print("bad COBS") 
+            print("bad COBS") 
             # self.queue.put(None)
             # print("CRC mismatch")
             return
@@ -166,18 +177,16 @@ class SerialDataCollector:
             # in the imu coordinate x is forward, y is right, z is down
             # so have to negate y and z
             # Update data variables
-
-            
-            # self.force_measurement[:] = ((self.unpacked[3], self.unpacked[2], self.unpacked[0], self.unpacked[1])) # 0 is left-back, 1 left-front, 2 right-back, 3 right-front
             
             self.fresh = self.unpacked[26] # [35]
 
-            force_measurement_fresh = bool(self.fresh & self.FRESH_LOAD_CELL_ALL)
-            if force_measurement_fresh:
-                self.force_measurement_raw[:] = self.unpacked[0:4] # 0 is left-back, 1 left-front, 2 right-back, 3 right-front
-                self.force_measurement[:] = self.filter_force_measurement.add(self.force_measurement_raw)
-                self.contact[:] = (self.force_measurement[0] + self.force_measurement[1])>2850, (self.force_measurement[2] + self.force_measurement[3])>2850
-            # print(force_measurement_fresh)
+            # force_measurement_fresh = bool(self.fresh & self.FRESH_LOAD_CELL_ALL)
+            # if force_measurement_fresh:
+
+            self.force_measurement_raw[:] = self.unpacked[0:4] # 0 is left-back, 1 left-front, 2 right-back, 3 right-front
+            self.force_measurement[:] = self.filter_force_measurement.add(self.force_measurement_raw)
+            self.contact[0] = (self.force_measurement[0] + self.force_measurement[1]-self.force_measurement_min[0]-self.force_measurement_min[1])>self.force_measurement_threshold 
+            self.contact[1] = (self.force_measurement[2] + self.force_measurement[3]-self.force_measurement_min[2]-self.force_measurement_min[3])>self.force_measurement_threshold
             
             self.lin_acc_raw[:] = self.unpacked[4:7]
             self.ang_vel_raw[:] = self.unpacked[7:10]
@@ -213,6 +222,7 @@ class SerialDataCollector:
     def get_latest_data(self):
         return {
             'force_measurement': self.force_measurement_raw,
+            'self.force_measurement_min': self.force_measurement_min,
             'lin_acc': self.lin_acc,
             'contact': self.contact,
             # 'lin_acc_raw': self.lin_acc_raw,
@@ -268,7 +278,7 @@ class SensorController:
 
     def get_latest_data(self):
         try:
-            return self.queue.get(timeout=0.05)
+            return self.queue.get(timeout=0.1)
         except Empty:
             print("No data received!")
             return None
@@ -296,12 +306,12 @@ if __name__ == "__main__":
                 # print(f"{latest_data['sps']:.2f}")
                 # print(latest_data['sps'])
                 # print(latest_data['gyroData'])
-                # print(latest_data['contact'],latest_data['force_measurement'])
+                print(latest_data['contact'],latest_data['force_measurement'])
 
                 publisher.publish({"sensors":latest_data})
                 pass
             else:
-                print("No data received!")
+                print("sensorController: No data received!")
             
             elapsed_time = time.time() - start_time
             sleep_time = frame_time - elapsed_time

@@ -89,6 +89,7 @@
         "qr": "cpp",
         "eigenvalues": "cpp",
         "lu": "cpp",
-        "cholesky": "cpp"
+        "cholesky": "cpp",
+        "*.inc": "cpp"
     }
 }

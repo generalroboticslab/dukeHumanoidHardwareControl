@@ -4,9 +4,9 @@
             "name": "Linux",
             "includePath": [
                 "${workspaceFolder}/**",
+                "${workspaceFolder}/ext/SOEM/soem",
                 "${env:HOME}/repo/micromamba/envs/py38/include/**",
-                "${env:HOME}/repo/micromamba/envs/py38/include",
-                "${workspaceFolder}/SOEM/soem"
+                "${env:HOME}/repo/micromamba/envs/py38/include"
             ],
             "defines": [],
             "compilerPath": "/usr/bin/gcc",

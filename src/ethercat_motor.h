@@ -43,8 +43,8 @@ using VectorNd = Eigen::Matrix<ScalarType, NumElements, 1>;
 
 #define NUM_TARGET 10 // num of motors
 
-const VectorNd<double, 10> gear_ratio_all = {18, 20, 18, 18, 10,18, 20, 18, 18, 10}; // hack max 6 motors
-const VectorNd<double, 10> torque_multiplier_all = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
+// const VectorNd<double, 10> gear_ratio_all = {18, 20, 18, 18, 10, 18, 20, 18, 18, 10};
+// const VectorNd<double, 10> torque_multiplier_all = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
 
 // 2020-20 motor current torue ratio: toruqe [NM] = 2.0 * current [A] (from measurement)
 // 2010-10 motor current torque ratio: toruqe [NM] = 1.6325 * current [A] (from figure)
@@ -242,29 +242,42 @@ public:
     VectorNd<uint16, NUM_TARGET> status_word = VectorNd<uint16, NUM_TARGET>::Zero(); // status word
 
     // gear_ratio_all and torque_multiplier_all may have more elements (for debug)
-    VectorNd<double, NUM_TARGET> gear_ratio = gear_ratio_all.head(NUM_TARGET);
-    VectorNd<double, NUM_TARGET> torque_multiplier = torque_multiplier_all.head(NUM_TARGET);
+    // VectorNd<double, NUM_TARGET> gear_ratio = gear_ratio_all.head(NUM_TARGET);
+    // VectorNd<double, NUM_TARGET> torque_multiplier = torque_multiplier_all.head(NUM_TARGET);
+
+    VectorNd<double, NUM_TARGET> gear_ratio = {18, 20, 18, 18, 10, 18, 20, 18, 18, 10};
+    VectorNd<double, NUM_TARGET> torque_multiplier = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
+    VectorNd<double, NUM_TARGET> rotor_current_to_torque_ratio = {0.165, 0.165, 0.165, 0.165, 0.165, 0.165, 0.165, 0.165, 0.165, 0.165};  // [A] -> [Nm], robot specific only
+
+    // double rotor_current_to_torque_ratio = 0.165; // [A] -> [Nm], robot specific only
 
     VectorNd<double, NUM_TARGET> max_torque = VectorNd<double, NUM_TARGET>::Zero();
 
     
-    // robot specific only
-    double rotor_current_to_torque_ratio = 0.165;
     bool use_position_pd = false;
-    double kp = 60;
-    double kd = 5;
+    // double kp = 60;
+    // double kd = 5;
+    VectorNd<double, NUM_TARGET> kp = VectorNd<double, NUM_TARGET>::Zero();
+    VectorNd<double, NUM_TARGET> kd = VectorNd<double, NUM_TARGET>::Zero();
+
     VectorNd<double, NUM_TARGET> position_offset = VectorNd<double, NUM_TARGET>::Zero(); // motor position offset [rad]
     VectorNd<double, NUM_TARGET> actual_position_after_offset = VectorNd<double, NUM_TARGET>::Zero(); // actual motor position after offset [rad]
 
     VectorNd<double, NUM_TARGET> dof_position = VectorNd<double, NUM_TARGET>::Zero(); // dof position [rad]
     VectorNd<double, NUM_TARGET> dof_velocity = VectorNd<double, NUM_TARGET>::Zero(); // dof velocity [rad/s]
+    VectorNd<double, NUM_TARGET> dof_velocity_filtered = VectorNd<double, NUM_TARGET>::Zero(); // dof velocity [rad/s]
     VectorNd<double, NUM_TARGET> target_dof_position = VectorNd<double, NUM_TARGET>::Zero();  // target dof position [rad]
     VectorNd<double, NUM_TARGET> target_dof_torque_Nm = VectorNd<double, NUM_TARGET>::Zero();  // target dof velocity [rad/s]
     VectorNd<double, NUM_TARGET> target_dof_torque_Nm_filtered = VectorNd<double, NUM_TARGET>::Zero();  // target dof velocity [rad/s]
 
+    VectorNd<double, NUM_TARGET> target_dof_torque_A = VectorNd<double, NUM_TARGET>::Zero(); 
+    VectorNd<double, NUM_TARGET> target_dof_torque_A_adjusted = VectorNd<double, NUM_TARGET>::Zero(); 
+
+    
     // timing variables
     std::chrono::high_resolution_clock::time_point t;
     double dt_measured = 0;
+    int loop_counter = 0;
 
     std::string ifname; // use ifconfig in commandline to find the ethernet name
 
@@ -286,12 +299,18 @@ public:
 
     bool init_successful = false;
 
-    const int sampling_rate=2000; // 4000; // sampling frequency [Hz]
+    const int sampling_rate=1000; //1000; // 4000; // sampling frequency [Hz]
     const int sleep_us = 1000000/sampling_rate;
-    double cutoff_frequency_for_actual_velocity = 800;
-    double cutoff_frequency_for_target_dof_torque_Nm = 800;
-    Iir::Butterworth::LowPass<4> filter_for_actual_velocity[NUM_TARGET]; 
-    Iir::Butterworth::LowPass<4> filter_target_dof_torque_Nm[NUM_TARGET]; 
+    int self_execution_us = 100; // subtract self execution time [us]
+
+    double cutoff_frequency_for_actual_velocity = 499;
+    Iir::Butterworth::LowPass<2> filter_for_actual_velocity[NUM_TARGET]; 
+
+    double cutoff_frequency_for_dof_velocity = 499;
+    Iir::Butterworth::LowPass<2> filter_for_dof_velocity[NUM_TARGET]; 
+
+    double cutoff_frequency_for_target_dof_torque_Nm = 499;
+    Iir::Butterworth::LowPass<2> filter_target_dof_torque_Nm[NUM_TARGET]; 
 
     void setup_filter(){
 
@@ -299,6 +318,7 @@ public:
         {
             filter_for_actual_velocity[i].setup(sampling_rate, cutoff_frequency_for_actual_velocity);
             filter_target_dof_torque_Nm[i].setup(sampling_rate, cutoff_frequency_for_target_dof_torque_Nm);
+            filter_for_dof_velocity[i].setup(sampling_rate, cutoff_frequency_for_dof_velocity);
         }
     }
 
@@ -426,7 +446,8 @@ public:
 
     void update_torque_by_pd(){  
 
-        target_dof_torque_Nm = (kp*(target_dof_position-dof_position)-kd*dof_velocity).cwiseProduct(torque_multiplier);
+        // target_dof_torque_Nm = (kp.cwiseProduct(target_dof_position-dof_position)-kd.cwiseProduct(dof_velocity)).cwiseProduct(torque_multiplier);
+        target_dof_torque_Nm = (kp.cwiseProduct(target_dof_position-dof_position)-kd.cwiseProduct(dof_velocity_filtered)).cwiseProduct(torque_multiplier);
 
 
         for (int i = 0; i < NUM_TARGET; i++)
@@ -434,9 +455,17 @@ public:
             target_dof_torque_Nm_filtered(i) = filter_target_dof_torque_Nm[i].filter(target_dof_torque_Nm(i));
         }
 
-        Eigen::VectorXd target_dof_torque_A = target_dof_torque_Nm.cwiseQuotient(gear_ratio*rotor_current_to_torque_ratio);
+        target_dof_torque_A = target_dof_torque_Nm.cwiseQuotient(gear_ratio.cwiseProduct(rotor_current_to_torque_ratio));
 
-        target_torque_raw =(target_dof_torque_A.cwiseQuotient(rated_torque)*1000.0);//.cwiseMin(-1000).cwiseMax(1000);
+        Eigen::VectorXd x = target_dof_torque_Nm.cwiseQuotient(gear_ratio.cwiseProduct(rotor_current_to_torque_ratio));
+        // target_torque_raw =(target_dof_torque_A.cwiseQuotient(rated_torque)*1000.0);//.cwiseMin(-1000).cwiseMax(1000);
+        //// torque compensation at low current setting the toruque non-linear and below the current-to-torque ratio is 1
+        double a = 1;
+        double b = -0.8;
+        // (1+x.sign()*a*(b*(x.abs()).exp()))*x
+        target_dof_torque_A_adjusted = ((1 + a * (b * (x.array().abs())).exp())*x.array()).matrix();
+        target_torque_raw =(target_dof_torque_A_adjusted.cwiseQuotient(rated_torque)*1000.0);//.cwiseMin(-1000).cwiseMax(1000);
+
         target_torque_int16 = target_torque_raw.cast<int16>(); // NO offset applied //TODO CHANGE TO INT16
     }
 
@@ -444,8 +473,11 @@ public:
         
         actual_position_after_offset = actual_position-position_offset;
         dof_position = _motor_value_to_dof_value(actual_position_after_offset);
-        dof_velocity = _motor_value_to_dof_value(actual_velocity_filtered);
-
+        dof_velocity = _motor_value_to_dof_value(actual_velocity);
+        for (int i = 0; i < NUM_TARGET; i++)
+        {
+            dof_velocity_filtered(i) = filter_for_dof_velocity[i].filter(dof_velocity(i));
+        }
     }
 
     ~Motor()
@@ -734,6 +766,8 @@ public:
                 // auto start = std::chrono::high_resolution_clock::now(); // timming code
 
                 t = std::chrono::high_resolution_clock::now(); // timming code
+
+                // start = std::chrono::high_resolution_clock::now(); //timing code
                 
                 // for (i = 1; i <= 10000; i++) // TODO CHANGE
                 while (!should_terminate)
@@ -768,7 +802,6 @@ public:
 
     void _run_loop()
     {
-        // auto start = std::chrono::high_resolution_clock::now();
         /*
                 Statusword       PDS FSA state
                 ....````....````
@@ -813,35 +846,41 @@ public:
                 switch (val[i]->status_word & 79)
                 {
                 case 0: // Not ready to switch on
-                    /* code */
-                    printf("motor[%d] status_word changed from 0x%-4X to 0x%-4X [Not ready to switch on].\n", i, status_word(i), val[i]->status_word);
+                    if (should_print){
+                        printf("motor[%d] status_word changed from 0x%-4X to 0x%-4X [Not ready to switch on].\n", i, status_word(i), val[i]->status_word);
+                    }
                     break;
                 case 64:                         // Switch on disabled
                     target[i]->control_word = 6; // 0b0110 shut down
-                    printf("motor[%d] status_word changed from 0x%-4X to 0x%-4X [Switch on disabled]. sending control_word=0x%-4X\n", i, status_word(i), val[i]->status_word, target[i]->control_word);
+                    if (should_print){
+                        printf("motor[%d] status_word changed from 0x%-4X to 0x%-4X [Switch on disabled]. sending control_word=0x%-4X\n", i, status_word(i), val[i]->status_word, target[i]->control_word);
+                    }
                     break;
                 case 15: // Fault reaction active
-                    printf("motor[%d] status_word changed from 0x%-4X to 0x%-4X [Fault reaction active].\n", i, status_word(i), val[i]->status_word);
+                    if (should_print){
+                        printf("motor[%d] status_word changed from 0x%-4X to 0x%-4X [Fault reaction active].\n", i, status_word(i), val[i]->status_word);
+                    }
                     break;
                 case 8: // Fault
-                    uint8 buf8; // HACK TODO change back 
-                    uint16 buf16;
-                    uint32 buf32;
-                    READ<uint8>(1+i, 0x1001, 0, buf8, "Error 0x1001");
+                    if (should_print){
+                        uint8 buf8; // HACK TODO change back 
+                        uint16 buf16;
+                        uint32 buf32;
+                        READ<uint8>(1+i, 0x1001, 0, buf8, "Error 0x1001");
 
-                    READ<uint8>(1+i, 0x1003, 0, buf8, "Error code 0x1003");
+                        READ<uint8>(1+i, 0x1003, 0, buf8, "Error code 0x1003");
 
-                    for (uint8 j = 1; j < buf8+1; j++) {
-                        READ<uint32>(1+i, 0x1003, j, buf32, "Error code 0x1003");
+                        for (uint8 j = 1; j < buf8+1; j++) {
+                            READ<uint32>(1+i, 0x1003, j, buf32, "Error code 0x1003");
+                        }
+
+                        READ<uint16>(1+i, 0x603F, 0, buf16, "Error code 0x603F");
+                        int16 buf_int16;
+                        READ<int16>(1+i, 0x605A, 0, buf_int16, "Quick stop option code 0x605A");
+                        printf("motor[%d] status_word changed from 0x%-4X to 0x%-4X [Fault]. sending control_word=0x%-4X\n", i, status_word(i), val[i]->status_word, target[i]->control_word);
                     }
-
-                    READ<uint16>(1+i, 0x603F, 0, buf16, "Error code 0x603F");
-                    int16 buf_int16;
-                    READ<int16>(1+i, 0x605A, 0, buf_int16, "Quick stop option code 0x605A");
-
                     target[i]->control_word = 128;
-                    printf("motor[%d] status_word changed from 0x%-4X to 0x%-4X [Fault]. sending control_word=0x%-4X\n", i, status_word(i), val[i]->status_word, target[i]->control_word);
-                    // exit(1);
+                    // // exit(1);
                     break;
 
                 default:
@@ -851,12 +890,16 @@ public:
                 {
                 case 33:                         // Ready to switch on
                     target[i]->control_word = 7; // 0b0111 switch on
-                    printf("motor[%d] status_word changed from 0x%-4X to 0x%-4X [Ready to switch on]. sending control_word=0x%-4X\n", i, status_word(i), val[i]->status_word, target[i]->control_word);
+                    if (should_print){
+                        printf("motor[%d] status_word changed from 0x%-4X to 0x%-4X [Ready to switch on]. sending control_word=0x%-4X\n", i, status_word(i), val[i]->status_word, target[i]->control_word);
+                    }
                     
                     break;
                 case 35:                          // Switched on
                     target[i]->control_word = 15; // 0b1111 switch_on+enable_operation: switch_on=1, enable_voltage=1, quick_stop=1, enable_operation=1, fault_reset=0,halt=0
-                    printf("motor[%d] status_word changed from 0x%-4X to 0x%-4X [Switched on]. sending control_word=0x%-4X\n", i, status_word(i), val[i]->status_word, target[i]->control_word);
+                    if (should_print){
+                        printf("motor[%d] status_word changed from 0x%-4X to 0x%-4X [Switched on]. sending control_word=0x%-4X\n", i, status_word(i), val[i]->status_word, target[i]->control_word);
+                    }
                     break;
                 case 39: // Operation enabled
                     if(should_print){
@@ -864,7 +907,10 @@ public:
                     }
                     break;
                 case 7: // Quick stop active
-                    printf("motor[%d] status_word changed from 0x%-4X to 0x%-4X [Quick stop active]\n", i, status_word(i), val[i]->status_word);
+                    
+                    if (should_print){
+                        printf("motor[%d] status_word changed from 0x%-4X to 0x%-4X [Quick stop active]\n", i, status_word(i), val[i]->status_word);
+                    }
                     break;
                 default:
                     break;
@@ -1111,12 +1157,14 @@ public:
            in reality, the motor only accept < 1600 us
         */
         // osal_usleep(1000);
-        osal_usleep(sleep_us);
+        osal_usleep(sleep_us-self_execution_us); // HACK: ACCOUNT FOR THE execution time, but may need to make it configurable
+
         // auto end = std::chrono::high_resolution_clock::now();
         // const std::chrono::duration<double, std::micro> diff = end - start;
-        // uint32 adjusted_diff = (uint32)(1000.0 - diff.count());
+        // uint32 adjusted_diff = (uint32)(sleep_us - diff.count());
         // if (adjusted_diff > 0){
         //     osal_usleep(adjusted_diff);
+        //     start = std::chrono::high_resolution_clock::now();
         // }
         // else{
         //     printf("code execution was longer than 500 us. diff = %f us\n", diff.count());
@@ -1201,7 +1249,6 @@ public:
     }
 
 private:
-    int loop_counter = 0;
     char IOmap[4096];
     int expectedWKC;                    // Expected Working Counter value (used for data exchange validation).
     volatile int wkc;                   // Actual Working Counter value received
@@ -1216,6 +1263,8 @@ private:
     uint8 buf8;
     int8 sbuf8;
     int32 sbuf32;
+
+    // std::chrono::time_point<std::chrono::high_resolution_clock> start;
 };
 
 #endif /* _ETHERCAT_MOTOR_H */

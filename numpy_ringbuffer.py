@@ -18,7 +18,7 @@ class _BaseRingBuffer:
             shape = (shape,)
         # self.storage acts as a circular buffer, the element at self._step is the newest element
         self.storage = np.zeros((buffer_len, *shape), dtype=dtype)
-        self.step = 0  # current step
+        self.step = -1  # current step
         self.max_step = self.buffer_len - 1
 
     def add(self, array: np.ndarray):
@@ -28,8 +28,9 @@ class _BaseRingBuffer:
         Args:
             array: The array to add to the buffer. Must have the correct shape.
         """
-        self.storage[self.step % self.buffer_len] = array
         self.step += 1
+        self.storage[self.step % self.buffer_len] = array
+        
         
     def __getitem__(self, index: Union[int, slice, Iterable]) -> np.ndarray:
         """
@@ -45,7 +46,7 @@ class _BaseRingBuffer:
         Returns:
             The array at the specified index.
         """
-        current_step = self.step-1
+        current_step = self.step
         if isinstance(index, slice):
             start, stop, step = index.indices(self.buffer_len)  # Concise slice handling
             indices = (current_step - np.arange(start, stop, step)) % self.buffer_len
@@ -58,12 +59,13 @@ class _BaseRingBuffer:
         
     def get_last(self):
         """Returns the last array in the buffer"""
-        return self.storage[(self.step-1) % self.buffer_len]
+        return self.storage[self.step % self.buffer_len]
     
     def get_last_n(self, n: int) -> np.ndarray:
         """Returns the last n arrays in the buffer, newest to oldest"""
         assert n <= self.buffer_len and n > 0
-        return self.storage[np.arange(self.step-1, self.step - 1-n, -1) % self.buffer_len]
+        # print(np.arange(self.step, self.step-n, -1) % self.buffer_len)
+        return self.storage[np.arange(self.step, self.step-n, -1) % self.buffer_len]
     
 
 class RingArrayBuffer(_BaseRingBuffer):    
@@ -174,3 +176,6 @@ def test_ring_array_buffer():
     assert np.array_equal(buffer.get_last(), np.array([0, 0]))
 
     print("All tests passed!")
+
+if __name__ == "__main__":
+    test_ring_array_buffer()
