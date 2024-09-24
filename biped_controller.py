@@ -70,8 +70,10 @@ class BipedController:
         self.command_zero_threshold = cfg.task.env.commandZeroThreshold
         
         self.dt: float = cfg.task.sim.dt
-
         self.decimation:int = cfg.task.env.control.decimation
+        self.rl_dt_ns: float = self.dt*self.decimation*1e9 # to [ns]
+        # print(self.rl_dt_ns)
+        
         self.kp:float = cfg.task.env.control.stiffness
         self.kd:float = cfg.task.env.control.damping
 
@@ -143,6 +145,11 @@ class BipedController:
             "enp3s0", CONTROL_MODE.CYCLIC_SYNC_TORQUE, 20, self.max_torque
         )
         self.motor.run()
+        
+        self.motor_counter = self.motor.loop_counter
+        self.decimation_actual = 0
+        self.t_ns = time.perf_counter_ns()
+
         # # # HACK remove later
         # self.motor.set_max_torque(np.ones(10)*1500)
 
@@ -151,12 +158,11 @@ class BipedController:
         if not signal.getsignal(signal.SIGINT):
             self.setup_signal_handler()
 
-        self.t = 0
 
     def update_phase(self):
         """update normalized contact phase for each foot"""
-        self.t = time.time()
-        self.phase = (self.phase_freq * self.t  +self.phase_offset) % 1
+        # TODO: may need to change into relative time
+        self.phase = (self.phase_freq * self.t_ns*1e-9  +self.phase_offset) % 1
         # self.phase_sin_cos = np.array([np.sin(self.phase), np.cos(self.phase)])
         self.contact_target = self.phase < self.phase_stance_ratio 
         self.is_zero_command = np.linalg.norm(self.commands[:3]) < self.command_zero_threshold
@@ -179,9 +185,11 @@ class BipedController:
         #     target_input_torque = self.motor.get_dof_pos_pd(dof_pos_target, kp, kd)
         #     self.motor.set_target_input_torque(target_input_torque)
         #     time.sleep(1/200)
+
         self.motor.kp = 40
         self.motor.kd = 4.0 
         self.motor.use_position_pd = True
+        # HACK CHANGE BACK 
         self.motor.target_dof_position =  self.default_dof_pos
         time.sleep(3)
 
@@ -233,7 +241,16 @@ class BipedController:
         #     self.motor.set_target_input_torque(self.target_input_torque)
         #     time.sleep(1/200)
         
+        
+        motor_counter = self.motor.loop_counter
+        self.decimation_actual = motor_counter - self.motor_counter # masured decimation per RL loop
+        self.motor_counter = motor_counter
+        
+        # # if self.decimation_actual>40: 
+        # print(self.decimation_actual, time.perf_counter_ns()-self.t_ns, time.perf_counter_ns(),self.t_ns)
+        
         data = {
+            "decimation_actual": self.decimation_actual,
             "dof_pos": self.motor.dof_pos,
             "dof_vel": self.motor.dof_vel,
             "commands": self.commands,
@@ -253,14 +270,13 @@ class BipedController:
             data["action_is_on"] = self.action_is_on
 
         self.data_publisher.publish({"real":data})
-        
-        
-        sleep_t = self.dt*self.decimation
-        # time.sleep(dt)
-        elapsed = time.time() - self.t
-        if elapsed < sleep_t:
-            time.sleep(sleep_t - elapsed)
-        self.t = time.time()
+
+        # sleep for rl_dt_ns
+        t_ns = time.perf_counter_ns()
+        elapsed = t_ns - self.t_ns
+        if elapsed < self.rl_dt_ns:
+            time.sleep((self.rl_dt_ns - elapsed)*1e-9)
+        self.t_ns = time.perf_counter_ns()
 
     def update_command(self):
         if self.data_receiver_data_id != self.data_receiver.data_id:
@@ -276,6 +292,7 @@ class BipedController:
         alpha = 0.9
         self.action_to_use = alpha*self.action + (1-alpha)*self.action
         # self.action = self.model.get_action(self.obs_buf)[0]
+        # self.action_scale = 0 # HACK: zero action for testing without moving
         self.dof_pos_target = self.action_to_use * self.action_scale + self.default_dof_pos
         
     def update_action_passive(self):
