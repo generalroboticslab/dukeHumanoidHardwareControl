@@ -173,7 +173,7 @@ First confirm the sensors are working
 sudo chrt -f 99 $(which python) -u sensor_controller.py
 ```
 
-Then, initialize the joint at the zero standing position. refer to wiki:[Joint initialization](https://www.notion.so/Joint-initialization-a068aad6d80e4ee8bc613af9ba50b854)
+Then, initialize the joint at the zero standing position. refer to wiki:[Joint initialization](https://sleepy-yoke-a21.notion.site/Sim2real-ebbd3cc351294a97a796040b54091273#a068aad6d80e4ee8bc613af9ba50b854)
 ```bash
 sudo chrt -f 99 $(which python) -u motor_controller.py
 
