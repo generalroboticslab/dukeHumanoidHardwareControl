@@ -236,12 +236,6 @@ class SerialDataCollector:
             # 'rot_debug': self.rotationMatrix.ravel()/self.rot_from_quat.ravel(),
             # 'rotationMatrix': self.rotationMatrix,
             'gravity_vec': self.gravity_vec,
-            # 'debug': np.linalg.norm(self.base_quat),
-            # 'filterStatus': self.filterStatus,
-            # 'filterDynamicsMode': self.filterDynamicsMode,
-            # 'filterStatusFlags': self.filterStatusFlags,
-            # 'fresh': self.interpret_fresh_bytes(self.fresh),
-            # 'timestamp': self.sample_timestamps[0],
             'sps': self.sps
         }
     

@@ -8,6 +8,9 @@
 </tr>
 </table>
 
+For information on manufacturing and deploying the humanoid, please visit our 🔧 
+**[hardware wiki](https://www.notion.so/Duke-Humanoid-V1-b-38d54de887d1403a82f2367490c45b89)**.
+
 ## Project structure
 
 ```bash
@@ -43,7 +46,6 @@
     └── teensy_comm.ino        # Teensy communication Arduino code
 
 ```
-The hardware and sim2real documentation are available at our [project wiki](https://www.notion.so/Duke-Humanoid-V1-b-38d54de887d1403a82f2367490c45b89)
 
 ## Setting up
 
@@ -182,7 +184,8 @@ after the initalization you can choose either to run dynamic matching with the r
 or run the RL biped controller.
 
 
-### Dynamic matching/Trajectory test 
+### Dynamic matching/Trajectory test
+in one terminal run `trajectory_PD_test.py`
 ```bash
 sudo chrt -f 99 $(which python) -u trajectory_PD_test.py
 
@@ -192,13 +195,12 @@ in another terminal run keyboard control code
 sudo chrt -f 99 $(which python) -u sshkeyboard_pd_test.py
 ```
 
-
 ### RL biped control
-run biped control.
+run `biped_controller.py`.
 ```
 sudo chrt -f 99 $(which python) -u biped_controller.py
 ```
-in another terminal run gampad
+in another terminal run `gampad.py`
 ```
 sudo chrt -f 99 $(which python) -u gampad.py
 ```

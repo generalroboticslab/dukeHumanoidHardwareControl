@@ -86,24 +86,14 @@ for i in range(1000000):
             "dof_current":motor.dof_current,
             "dof_force":motor.dof_force,
             "dof_force_target":  motor.target_dof_torque_Nm,
-            # "dof_vel_cpp":motor.dof_velocity,
-            # "dof_pos_cpp":motor.dof_position,
-            # "motor_pos_offset_cpp": motor.position_offset,
-            # "motor_pos_after_offset":motor.motor_pos_after_offset,
-            # "motor_pos_after_offset_cpp": motor.actual_position_after_offset,
-            # "motor_pos_after_offset_difference":motor.motor_pos_after_offset-motor.actual_position_after_offset,
-            # "motor_pos": motor.actual_position,
-            # "motor_pos_offset": motor.motor_pos_offset,
             "dof_pos_target": dof_pos_target,
             "target_dof_torque_A":motor.target_dof_torque_A,
             "target_dof_torque_A_adjusted": motor.target_dof_torque_A_adjusted,
-            # "dt_measured": motor.dt_measured,
             "action_is_on":action_is_on,
             "t_ns": time.perf_counter_ns()
             # "motor_vel": motor.actual_velocity,
             # "motor_vel_measured": motor.actual_velocity_measured,
         }
-        # data_publisher.enable = should_publish
         data_publisher.enable = True
         data_publisher.publish({"real":data})
         
